@@ -95,6 +95,8 @@ if [ -f env.sh ] ; then
 	. env.sh
 fi
 
+kernel=$(make -s -C $TOPDIR/$BPILINUX kernelversion)
+
 echo "This tool support following building mode(s):"
 echo "--------------------------------------------------------------------------------"
 echo "	1. Build all, atf-uboot and kernel and pack to download images."
@@ -111,7 +113,7 @@ if [ -z "$MODE" ]; then
 	read -p "Please choose a mode(1-7): " mode
 	echo
 else
-	mode=1
+	mode=$MODE
 fi
 
 if [ -z "$mode" ]; then
