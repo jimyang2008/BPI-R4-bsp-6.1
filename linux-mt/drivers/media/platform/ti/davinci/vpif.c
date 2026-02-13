@@ -480,7 +480,7 @@ static int vpif_probe(struct platform_device *pdev)
 		ret = irq;
 		goto err_put_rpm;
 	}
-	res_irq = (struct resource)DEFINE_RES_IRQ_NAMED(irq, of_node_full_name(pdev->dev.of_node));
+	res_irq = DEFINE_RES_IRQ_NAMED(irq, of_node_full_name(pdev->dev.of_node));
 	res_irq.flags |= irq_get_trigger_type(irq);
 
 	pdev_capture = kzalloc(sizeof(*pdev_capture), GFP_KERNEL);
@@ -505,7 +505,7 @@ static int vpif_probe(struct platform_device *pdev)
 	pdev_display = kzalloc(sizeof(*pdev_display), GFP_KERNEL);
 	if (!pdev_display) {
 		ret = -ENOMEM;
-		goto err_put_pdev_capture;
+		goto err_del_pdev_capture;
 	}
 
 	pdev_display->name = "vpif_display";
@@ -528,6 +528,8 @@ static int vpif_probe(struct platform_device *pdev)
 
 err_put_pdev_display:
 	platform_device_put(pdev_display);
+err_del_pdev_capture:
+	platform_device_del(pdev_capture);
 err_put_pdev_capture:
 	platform_device_put(pdev_capture);
 err_put_rpm:
@@ -538,7 +540,7 @@ err_put_rpm:
 	return ret;
 }
 
-static int vpif_remove(struct platform_device *pdev)
+static void vpif_remove(struct platform_device *pdev)
 {
 	struct vpif_data *data = platform_get_drvdata(pdev);
 
@@ -551,8 +553,6 @@ static int vpif_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 
 	kfree(data);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -592,7 +592,7 @@ static struct platform_driver vpif_driver = {
 		.name	= VPIF_DRIVER_NAME,
 		.pm	= vpif_pm_ops,
 	},
-	.remove = vpif_remove,
+	.remove_new = vpif_remove,
 	.probe = vpif_probe,
 };
 

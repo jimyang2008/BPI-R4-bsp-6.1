@@ -1,0 +1,23 @@
+/ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/perf-target-aarch64_cortex-a53_musl/feature/test-dwarf_getlocations.bin: \
+ test-dwarf_getlocations.c \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdc-predef.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/fortify/stdlib.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdlib.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/features.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/alltypes.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/alloca.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/limits.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/limits.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/fortify/fortify-headers.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/elfutils/libdw.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/gelf.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/libelf.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdint.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/stdint.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/sys/types.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/endian.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/fortify/sys/select.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/sys/select.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/elf.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdbool.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stddef.h

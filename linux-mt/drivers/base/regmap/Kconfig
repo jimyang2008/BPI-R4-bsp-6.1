@@ -4,14 +4,33 @@
 # subsystems should select the appropriate symbols.
 
 config REGMAP
+	tristate
 	select IRQ_DOMAIN if REGMAP_IRQ
 	select MDIO_BUS if REGMAP_MDIO
-	tristate
+	help
+	  Enable support for the Register Map (regmap) access API.
 
-config REGCACHE_COMPRESSED
-	select LZO_COMPRESS
-	select LZO_DECOMPRESS
-	bool
+	  Usually, this option is automatically selected when needed.
+	  However, you may want to enable it manually for running the regmap
+	  KUnit tests.
+
+	  If unsure, say N.
+
+config REGMAP_KUNIT
+	tristate "KUnit tests for regmap"
+	depends on KUNIT
+	default KUNIT_ALL_TESTS
+	select REGMAP_RAM
+
+config REGMAP_BUILD
+	bool "Enable regmap build"
+	depends on KUNIT
+	select REGMAP
+	help
+	  This option exists purely to allow the regmap KUnit tests to
+	  be enabled without having to enable some driver that uses
+	  regmap due to unfortunate issues with how KUnit tests are
+	  normally enabled.
 
 config REGMAP_AC97
 	select REGMAP
@@ -54,6 +73,10 @@ config REGMAP_IRQ
 	select REGMAP
 	bool
 
+config REGMAP_RAM
+	select REGMAP
+	tristate
+
 config REGMAP_SOUNDWIRE
 	select REGMAP
 	tristate
@@ -78,3 +101,8 @@ config REGMAP_SPI_AVMM
 	select REGMAP
 	tristate
 	depends on SPI
+
+config REGMAP_FSI
+	select REGMAP
+	tristate
+	depends on FSI

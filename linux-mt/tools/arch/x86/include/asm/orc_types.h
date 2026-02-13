@@ -39,6 +39,12 @@
 #define ORC_REG_SP_INDIRECT		9
 #define ORC_REG_MAX			15
 
+#define ORC_TYPE_UNDEFINED		0
+#define ORC_TYPE_END_OF_STACK		1
+#define ORC_TYPE_CALL			2
+#define ORC_TYPE_REGS			3
+#define ORC_TYPE_REGS_PARTIAL		4
+
 #ifndef __ASSEMBLY__
 
 /*
@@ -55,14 +61,14 @@ struct orc_entry {
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 	unsigned	sp_reg:4;
 	unsigned	bp_reg:4;
-	unsigned	type:2;
-	unsigned	end:1;
+	unsigned	type:3;
+	unsigned	signal:1;
 #elif __BYTE_ORDER == __BIG_ENDIAN
 	unsigned	bp_reg:4;
 	unsigned	sp_reg:4;
-	unsigned	unused:5;
-	unsigned	end:1;
-	unsigned	type:2;
+	unsigned	unused:4;
+	unsigned	signal:1;
+	unsigned	type:3;
 #endif
 } __packed;
 

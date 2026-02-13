@@ -1,0 +1,26 @@
+/ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/perf-target-aarch64_cortex-a53_musl/feature/test-bpf.bin: \
+ test-bpf.c \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdc-predef.h \
+ /ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/arch/arm64/include/uapi/asm/unistd.h \
+ /ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/include/uapi/asm-generic/unistd.h \
+ /ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/arch/arm64/include/uapi/asm/bitsperlong.h \
+ /ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/include/asm-generic/bitsperlong.h \
+ /ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/include/uapi/asm-generic/bitsperlong.h \
+ /ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/include/uapi/linux/bpf.h \
+ /ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/include/linux/types.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdbool.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stddef.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/alltypes.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdint.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/stdint.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/asm/types.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/asm-generic/types.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/asm-generic/int-ll64.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/asm/posix_types.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/asm-generic/posix_types.h \
+ /ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/include/uapi/linux/bpf_common.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/fortify/unistd.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/unistd.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/features.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/posix.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/fortify/fortify-headers.h

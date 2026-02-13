@@ -8,6 +8,7 @@
 #include <linux/kernel.h>
 #include <linux/of_net.h>
 #include <linux/of_platform.h>
+#include <linux/platform_device.h>
 #include <linux/phy.h>
 #include <linux/export.h>
 #include <linux/device.h>
@@ -57,7 +58,7 @@ static int of_get_mac_addr(struct device_node *np, const char *name, u8 *addr)
 	return -ENODEV;
 }
 
-static int of_get_mac_addr_nvmem(struct device_node *np, u8 *addr)
+int of_get_mac_address_nvmem(struct device_node *np, u8 *addr)
 {
 	struct platform_device *pdev = of_find_device_by_node(np);
 	struct nvmem_cell *cell;
@@ -94,6 +95,7 @@ static int of_get_mac_addr_nvmem(struct device_node *np, u8 *addr)
 
 	return 0;
 }
+EXPORT_SYMBOL(of_get_mac_address_nvmem);
 
 static int of_add_mac_address(struct device_node *np, u8* addr)
 {
@@ -161,7 +163,7 @@ int of_get_mac_address(struct device_node *np, u8 *addr)
 	if (!ret)
 		goto found;
 
-	ret = of_get_mac_addr_nvmem(np, addr);
+	ret = of_get_mac_address_nvmem(np, addr);
 	if (ret)
 		return ret;
 

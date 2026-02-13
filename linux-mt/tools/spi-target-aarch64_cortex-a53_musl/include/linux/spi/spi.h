@@ -1,0 +1,1 @@
+/ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/spi-target-aarch64_cortex-a53_musl/../../include/uapi/linux/spi/spi.h

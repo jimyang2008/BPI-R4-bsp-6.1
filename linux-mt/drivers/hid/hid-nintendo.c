@@ -325,28 +325,28 @@ struct joycon_imu_cal {
  * All the controller's button values are stored in a u32.
  * They can be accessed with bitwise ANDs.
  */
-static const u32 JC_BTN_Y	= BIT(0);
-static const u32 JC_BTN_X	= BIT(1);
-static const u32 JC_BTN_B	= BIT(2);
-static const u32 JC_BTN_A	= BIT(3);
-static const u32 JC_BTN_SR_R	= BIT(4);
-static const u32 JC_BTN_SL_R	= BIT(5);
-static const u32 JC_BTN_R	= BIT(6);
-static const u32 JC_BTN_ZR	= BIT(7);
-static const u32 JC_BTN_MINUS	= BIT(8);
-static const u32 JC_BTN_PLUS	= BIT(9);
-static const u32 JC_BTN_RSTICK	= BIT(10);
-static const u32 JC_BTN_LSTICK	= BIT(11);
-static const u32 JC_BTN_HOME	= BIT(12);
-static const u32 JC_BTN_CAP	= BIT(13); /* capture button */
-static const u32 JC_BTN_DOWN	= BIT(16);
-static const u32 JC_BTN_UP	= BIT(17);
-static const u32 JC_BTN_RIGHT	= BIT(18);
-static const u32 JC_BTN_LEFT	= BIT(19);
-static const u32 JC_BTN_SR_L	= BIT(20);
-static const u32 JC_BTN_SL_L	= BIT(21);
-static const u32 JC_BTN_L	= BIT(22);
-static const u32 JC_BTN_ZL	= BIT(23);
+#define JC_BTN_Y	 BIT(0)
+#define JC_BTN_X	 BIT(1)
+#define JC_BTN_B	 BIT(2)
+#define JC_BTN_A	 BIT(3)
+#define JC_BTN_SR_R	 BIT(4)
+#define JC_BTN_SL_R	 BIT(5)
+#define JC_BTN_R	 BIT(6)
+#define JC_BTN_ZR	 BIT(7)
+#define JC_BTN_MINUS	 BIT(8)
+#define JC_BTN_PLUS	 BIT(9)
+#define JC_BTN_RSTICK	 BIT(10)
+#define JC_BTN_LSTICK	 BIT(11)
+#define JC_BTN_HOME	 BIT(12)
+#define JC_BTN_CAP	 BIT(13) /* capture button */
+#define JC_BTN_DOWN	 BIT(16)
+#define JC_BTN_UP	 BIT(17)
+#define JC_BTN_RIGHT	 BIT(18)
+#define JC_BTN_LEFT	 BIT(19)
+#define JC_BTN_SR_L	 BIT(20)
+#define JC_BTN_SL_L	 BIT(21)
+#define JC_BTN_L	 BIT(22)
+#define JC_BTN_ZL	 BIT(23)
 
 enum joycon_msg_type {
 	JOYCON_MSG_TYPE_NONE,
@@ -433,7 +433,9 @@ struct joycon_ctlr {
 	u8 usb_ack_match;
 	u8 subcmd_ack_match;
 	bool received_input_report;
+	unsigned int last_input_report_msecs;
 	unsigned int last_subcmd_sent_msecs;
+	unsigned int consecutive_valid_report_deltas;
 
 	/* factory calibration data */
 	struct joycon_stick_cal left_stick_cal_x;
@@ -543,19 +545,54 @@ static void joycon_wait_for_input_report(struct joycon_ctlr *ctlr)
  * Sending subcommands and/or rumble data at too high a rate can cause bluetooth
  * controller disconnections.
  */
+#define JC_INPUT_REPORT_MIN_DELTA	8
+#define JC_INPUT_REPORT_MAX_DELTA	17
+#define JC_SUBCMD_TX_OFFSET_MS		4
+#define JC_SUBCMD_VALID_DELTA_REQ	3
+#define JC_SUBCMD_RATE_MAX_ATTEMPTS	500
+#define JC_SUBCMD_RATE_LIMITER_USB_MS	20
+#define JC_SUBCMD_RATE_LIMITER_BT_MS	60
+#define JC_SUBCMD_RATE_LIMITER_MS(ctlr)	((ctlr)->hdev->bus == BUS_USB ? JC_SUBCMD_RATE_LIMITER_USB_MS : JC_SUBCMD_RATE_LIMITER_BT_MS)
 static void joycon_enforce_subcmd_rate(struct joycon_ctlr *ctlr)
 {
-	static const unsigned int max_subcmd_rate_ms = 25;
-	unsigned int current_ms = jiffies_to_msecs(jiffies);
-	unsigned int delta_ms = current_ms - ctlr->last_subcmd_sent_msecs;
+	unsigned int current_ms;
+	unsigned long subcmd_delta;
+	int consecutive_valid_deltas = 0;
+	int attempts = 0;
+	unsigned long flags;
 
-	while (delta_ms < max_subcmd_rate_ms &&
-	       ctlr->ctlr_state == JOYCON_CTLR_STATE_READ) {
+	if (unlikely(ctlr->ctlr_state != JOYCON_CTLR_STATE_READ))
+		return;
+
+	do {
 		joycon_wait_for_input_report(ctlr);
 		current_ms = jiffies_to_msecs(jiffies);
-		delta_ms = current_ms - ctlr->last_subcmd_sent_msecs;
+		subcmd_delta = current_ms - ctlr->last_subcmd_sent_msecs;
+
+		spin_lock_irqsave(&ctlr->lock, flags);
+		consecutive_valid_deltas = ctlr->consecutive_valid_report_deltas;
+		spin_unlock_irqrestore(&ctlr->lock, flags);
+
+		attempts++;
+	} while ((consecutive_valid_deltas < JC_SUBCMD_VALID_DELTA_REQ ||
+		  subcmd_delta < JC_SUBCMD_RATE_LIMITER_MS(ctlr)) &&
+		 ctlr->ctlr_state == JOYCON_CTLR_STATE_READ &&
+		 attempts < JC_SUBCMD_RATE_MAX_ATTEMPTS);
+
+	if (attempts >= JC_SUBCMD_RATE_MAX_ATTEMPTS) {
+		hid_warn(ctlr->hdev, "%s: exceeded max attempts", __func__);
+		return;
 	}
+
 	ctlr->last_subcmd_sent_msecs = current_ms;
+
+	/*
+	 * Wait a short time after receiving an input report before
+	 * transmitting. This should reduce odds of a TX coinciding with an RX.
+	 * Minimizing concurrent BT traffic with the controller seems to lower
+	 * the rate of disconnections.
+	 */
+	msleep(JC_SUBCMD_TX_OFFSET_MS);
 }
 
 static int joycon_hid_send_sync(struct joycon_ctlr *ctlr, u8 *data, size_t len,
@@ -859,14 +896,27 @@ static int joycon_request_calibration(struct joycon_ctlr *ctlr)
  */
 static void joycon_calc_imu_cal_divisors(struct joycon_ctlr *ctlr)
 {
-	int i;
+	int i, divz = 0;
 
 	for (i = 0; i < 3; i++) {
 		ctlr->imu_cal_accel_divisor[i] = ctlr->accel_cal.scale[i] -
 						ctlr->accel_cal.offset[i];
 		ctlr->imu_cal_gyro_divisor[i] = ctlr->gyro_cal.scale[i] -
 						ctlr->gyro_cal.offset[i];
+
+		if (ctlr->imu_cal_accel_divisor[i] == 0) {
+			ctlr->imu_cal_accel_divisor[i] = 1;
+			divz++;
+		}
+
+		if (ctlr->imu_cal_gyro_divisor[i] == 0) {
+			ctlr->imu_cal_gyro_divisor[i] = 1;
+			divz++;
+		}
 	}
+
+	if (divz)
+		hid_warn(ctlr->hdev, "inaccurate IMU divisors (%d)\n", divz);
 }
 
 static const s16 DFLT_ACCEL_OFFSET /*= 0*/;
@@ -1095,14 +1145,14 @@ static void joycon_parse_imu_report(struct joycon_ctlr *ctlr,
 		    JC_IMU_SAMPLES_PER_DELTA_AVG) {
 			ctlr->imu_avg_delta_ms = ctlr->imu_delta_samples_sum /
 						 ctlr->imu_delta_samples_count;
-			/* don't ever want divide by zero shenanigans */
-			if (ctlr->imu_avg_delta_ms == 0) {
-				ctlr->imu_avg_delta_ms = 1;
-				hid_warn(ctlr->hdev,
-					 "calculated avg imu delta of 0\n");
-			}
 			ctlr->imu_delta_samples_count = 0;
 			ctlr->imu_delta_samples_sum = 0;
+		}
+
+		/* don't ever want divide by zero shenanigans */
+		if (ctlr->imu_avg_delta_ms == 0) {
+			ctlr->imu_avg_delta_ms = 1;
+			hid_warn(ctlr->hdev, "calculated avg imu delta of 0\n");
 		}
 
 		/* useful for debugging IMU sample rate */
@@ -1223,6 +1273,7 @@ static void joycon_parse_report(struct joycon_ctlr *ctlr,
 	u8 tmp;
 	u32 btns;
 	unsigned long msecs = jiffies_to_msecs(jiffies);
+	unsigned long report_delta_ms = msecs - ctlr->last_input_report_msecs;
 
 	spin_lock_irqsave(&ctlr->lock, flags);
 	if (IS_ENABLED(CONFIG_NINTENDO_FF) && rep->vibrator_report &&
@@ -1363,6 +1414,31 @@ static void joycon_parse_report(struct joycon_ctlr *ctlr,
 	}
 
 	input_sync(dev);
+
+	spin_lock_irqsave(&ctlr->lock, flags);
+	ctlr->last_input_report_msecs = msecs;
+	/*
+	 * Was this input report a reasonable time delta compared to the prior
+	 * report? We use this information to decide when a safe time is to send
+	 * rumble packets or subcommand packets.
+	 */
+	if (report_delta_ms >= JC_INPUT_REPORT_MIN_DELTA &&
+	    report_delta_ms <= JC_INPUT_REPORT_MAX_DELTA) {
+		if (ctlr->consecutive_valid_report_deltas < JC_SUBCMD_VALID_DELTA_REQ)
+			ctlr->consecutive_valid_report_deltas++;
+	} else {
+		ctlr->consecutive_valid_report_deltas = 0;
+	}
+	/*
+	 * Our consecutive valid report tracking is only relevant for
+	 * bluetooth-connected controllers. For USB devices, we're beholden to
+	 * USB's underlying polling rate anyway. Always set to the consecutive
+	 * delta requirement.
+	 */
+	if (ctlr->hdev->bus == BUS_USB)
+		ctlr->consecutive_valid_report_deltas = JC_SUBCMD_VALID_DELTA_REQ;
+
+	spin_unlock_irqrestore(&ctlr->lock, flags);
 
 	/*
 	 * Immediately after receiving a report is the most reliable time to
@@ -1527,6 +1603,7 @@ static int joycon_set_rumble(struct joycon_ctlr *ctlr, u16 amp_r, u16 amp_l,
 	u16 freq_l_low;
 	u16 freq_l_high;
 	unsigned long flags;
+	int next_rq_head;
 
 	spin_lock_irqsave(&ctlr->lock, flags);
 	freq_r_low = ctlr->rumble_rl_freq;
@@ -1547,8 +1624,21 @@ static int joycon_set_rumble(struct joycon_ctlr *ctlr, u16 amp_r, u16 amp_l,
 	joycon_encode_rumble(data, freq_l_low, freq_l_high, amp);
 
 	spin_lock_irqsave(&ctlr->lock, flags);
-	if (++ctlr->rumble_queue_head >= JC_RUMBLE_QUEUE_SIZE)
-		ctlr->rumble_queue_head = 0;
+
+	next_rq_head = ctlr->rumble_queue_head + 1;
+	if (next_rq_head >= JC_RUMBLE_QUEUE_SIZE)
+		next_rq_head = 0;
+
+	/* Did we overrun the circular buffer?
+	 * If so, be sure we keep the latest intended rumble state.
+	 */
+	if (next_rq_head == ctlr->rumble_queue_tail) {
+		hid_dbg(ctlr->hdev, "rumble queue is full");
+		/* overwrite the prior value at the end of the circular buf */
+		next_rq_head = ctlr->rumble_queue_head;
+	}
+
+	ctlr->rumble_queue_head = next_rq_head;
 	memcpy(ctlr->rumble_data[ctlr->rumble_queue_head], data,
 	       JC_RUMBLE_DATA_SIZE);
 
@@ -2209,7 +2299,7 @@ static int nintendo_hid_probe(struct hid_device *hdev,
 
 	ctlr->hdev = hdev;
 	ctlr->ctlr_state = JOYCON_CTLR_STATE_INIT;
-	ctlr->rumble_queue_head = JC_RUMBLE_QUEUE_SIZE - 1;
+	ctlr->rumble_queue_head = 0;
 	ctlr->rumble_queue_tail = 0;
 	hid_set_drvdata(hdev, ctlr);
 	mutex_init(&ctlr->output_mutex);

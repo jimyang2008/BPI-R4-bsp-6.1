@@ -12,9 +12,8 @@
 
 #include <objtool/elf.h>
 
-#ifndef __weak
+#undef __weak
 #define __weak __attribute__((weak))
-#endif
 
 struct pv_state {
 	bool clean;
@@ -23,13 +22,13 @@ struct pv_state {
 
 struct objtool_file {
 	struct elf *elf;
-	struct list_head insn_list;
 	DECLARE_HASHTABLE(insn_hash, 20);
 	struct list_head retpoline_call_list;
 	struct list_head return_thunk_list;
 	struct list_head static_call_list;
 	struct list_head mcount_loc_list;
 	struct list_head endbr_list;
+	struct list_head call_list;
 	bool ignore_unreachables, hints, rodata;
 
 	unsigned int nr_endbr;

@@ -69,7 +69,7 @@ config MTD_CMDLINE_PARTS
 
 config MTD_MYLOADER_PARTS
 	tristate "MyLoader partition parsing"
-	depends on ADM5120 || ATH25 || ATH79
+	depends on ADM5120 || ATH79
 	help
 	  MyLoader is a bootloader which allows the user to define partitions
 	  in flash devices, by putting a table in the second erase block
@@ -91,7 +91,7 @@ config MTD_OF_PARTS
 	  This provides a open firmware device tree partition parser
 	  which derives the partition map from the children of the
 	  flash memory node, as described in
-	  Documentation/devicetree/bindings/mtd/partition.txt.
+	  Documentation/devicetree/bindings/mtd/mtd.yaml.
 
 config MTD_OF_PARTS_BCM4908
 	bool "BCM4908 partitioning support"
@@ -165,7 +165,7 @@ config MTD_PARSER_TRX
 
 config MTD_SHARPSL_PARTS
 	tristate "Sharp SL Series NAND flash partition parser"
-	depends on MTD_NAND_SHARPSL || MTD_NAND_TMIO || COMPILE_TEST
+	depends on MTD_NAND_SHARPSL || COMPILE_TEST
 	help
 	  This provides the read-only FTL logic necessary to read the partition
 	  table from the NAND flash of Sharp SL Series (Zaurus) and the MTD

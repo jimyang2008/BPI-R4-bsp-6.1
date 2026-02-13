@@ -11,13 +11,10 @@
 #include <linux/vmalloc.h>
 #include <linux/raid/detect.h>
 #include <linux/property.h>
-#ifdef CONFIG_FIT_PARTITION
-#include <linux/root_dev.h>
-#endif
 
 #include "check.h"
 
-static int (*check_part[])(struct parsed_partitions *) = {
+static int (*const check_part[])(struct parsed_partitions *) = {
 	/*
 	 * Probe partition formats with tables at disk address 0
 	 * that also have an ADFS boot block at 0xdc0.
@@ -48,11 +45,11 @@ static int (*check_part[])(struct parsed_partitions *) = {
 #ifdef CONFIG_CMDLINE_PARTITION
 	cmdline_partition,
 #endif
+#ifdef CONFIG_OF_PARTITION
+	of_partition,		/* cmdline have priority to OF */
+#endif
 #ifdef CONFIG_EFI_PARTITION
 	efi_partition,		/* this must come before msdos */
-#endif
-#ifdef CONFIG_FIT_PARTITION
-	fit_partition,
 #endif
 #ifdef CONFIG_SGI_PARTITION
 	sgi_partition,
@@ -92,14 +89,6 @@ static int (*check_part[])(struct parsed_partitions *) = {
 #endif
 	NULL
 };
-
-static void bdev_set_nr_sectors(struct block_device *bdev, sector_t sectors)
-{
-	spin_lock(&bdev->bd_size_lock);
-	i_size_write(bdev->bd_inode, (loff_t)sectors << SECTOR_SHIFT);
-	bdev->bd_nr_sectors = sectors;
-	spin_unlock(&bdev->bd_size_lock);
-}
 
 static struct parsed_partitions *allocate_partitions(struct gendisk *hd)
 {
@@ -244,7 +233,7 @@ static struct attribute *part_attrs[] = {
 	NULL
 };
 
-static struct attribute_group part_attr_group = {
+static const struct attribute_group part_attr_group = {
 	.attrs = part_attrs,
 };
 
@@ -262,9 +251,9 @@ static void part_release(struct device *dev)
 	iput(dev_to_bdev(dev)->bd_inode);
 }
 
-static int part_uevent(struct device *dev, struct kobj_uevent_env *env)
+static int part_uevent(const struct device *dev, struct kobj_uevent_env *env)
 {
-	struct block_device *part = dev_to_bdev(dev);
+	const struct block_device *part = dev_to_bdev(dev);
 
 	add_uevent_var(env, "PARTN=%u", part->bd_partno);
 	if (part->bd_meta_info && part->bd_meta_info->volname[0])
@@ -272,31 +261,33 @@ static int part_uevent(struct device *dev, struct kobj_uevent_env *env)
 	return 0;
 }
 
-struct device_type part_type = {
+const struct device_type part_type = {
 	.name		= "partition",
 	.groups		= part_attr_groups,
 	.release	= part_release,
 	.uevent		= part_uevent,
 };
 
-static void delete_partition(struct block_device *part)
+void drop_partition(struct block_device *part)
 {
 	lockdep_assert_held(&part->bd_disk->open_mutex);
 
-	fsync_bdev(part);
-	__invalidate_device(part, true);
-
 	xa_erase(&part->bd_disk->part_tbl, part->bd_partno);
 	kobject_put(part->bd_holder_dir);
-	device_del(&part->bd_device);
 
+	device_del(&part->bd_device);
+	put_device(&part->bd_device);
+}
+
+static void delete_partition(struct block_device *part)
+{
 	/*
 	 * Remove the block device from the inode hash, so that it cannot be
 	 * looked up any more even when openers still hold references.
 	 */
 	remove_inode_hash(part->bd_inode);
-
-	put_device(&part->bd_device);
+	bdev_mark_dead(part, false);
+	drop_partition(part);
 }
 
 static ssize_t whole_disk_show(struct device *dev,
@@ -304,7 +295,17 @@ static ssize_t whole_disk_show(struct device *dev,
 {
 	return 0;
 }
-static DEVICE_ATTR(whole_disk, 0444, whole_disk_show, NULL);
+static const DEVICE_ATTR(whole_disk, 0444, whole_disk_show, NULL);
+
+static bool part_meta_match(const char *attr, const char *member, size_t length)
+{
+	/* check if length of attr exceeds specified maximum length */
+	if (strnlen(attr, length) == length)
+		return false;
+
+	/* return true if strings match */
+	return !strncmp(attr, member, length);
+}
 
 static struct fwnode_handle *find_partition_fwnode(struct block_device *bdev)
 {
@@ -312,29 +313,50 @@ static struct fwnode_handle *find_partition_fwnode(struct block_device *bdev)
 	struct device *ddev = disk_to_dev(bdev->bd_disk);
 	const char *partname, *uuid;
 	u32 partno;
+	bool got_uuid, got_partname, got_partno;
 
 	fw_parts = device_get_named_child_node(ddev, "partitions");
-	if (!fw_parts)
-		fw_parts = device_get_named_child_node(ddev->parent, "partitions");
-
 	if (!fw_parts)
 		return NULL;
 
 	fwnode_for_each_child_node(fw_parts, fw_part) {
-		if (!fwnode_property_read_string(fw_part, "uuid", &uuid) &&
-		    (!bdev->bd_meta_info || strncmp(uuid,
-						    bdev->bd_meta_info->uuid,
-						    PARTITION_META_INFO_UUIDLTH)))
+		got_uuid = false;
+		got_partname = false;
+		got_partno = false;
+		/*
+		 * In case 'uuid' is defined in the partitions firmware node
+		 * require partition meta info being present and the specified
+		 * uuid to match.
+		 */
+		got_uuid = !fwnode_property_read_string(fw_part, "uuid", &uuid);
+		if (got_uuid && (!bdev->bd_meta_info ||
+				 !part_meta_match(uuid, bdev->bd_meta_info->uuid,
+						  PARTITION_META_INFO_UUIDLTH)))
 			continue;
 
-		if (!fwnode_property_read_string(fw_part, "partname", &partname) &&
-		    (!bdev->bd_meta_info || strncmp(partname,
-						    bdev->bd_meta_info->volname,
-						    PARTITION_META_INFO_VOLNAMELTH)))
+		/*
+		 * In case 'partname' is defined in the partitions firmware node
+		 * require partition meta info being present and the specified
+		 * volname to match.
+		 */
+		got_partname = !fwnode_property_read_string(fw_part, "partname",
+							    &partname);
+		if (got_partname && (!bdev->bd_meta_info ||
+				     !part_meta_match(partname,
+						      bdev->bd_meta_info->volname,
+						      PARTITION_META_INFO_VOLNAMELTH)))
 			continue;
 
-		if (!fwnode_property_read_u32(fw_part, "partno", &partno) &&
-		    bdev->bd_partno != partno)
+		/*
+		 * In case 'partno' is defined in the partitions firmware node
+		 * the specified partno needs to match.
+		 */
+		got_partno = !fwnode_property_read_u32(fw_part, "partno", &partno);
+		if (got_partno && bdev->bd_partno != partno)
+			continue;
+
+		/* Skip if no matching criteria is present in firmware node */
+		if (!got_uuid && !got_partname && !got_partno)
 			continue;
 
 		return fw_part;
@@ -445,10 +467,8 @@ static struct block_device *add_partition(struct gendisk *disk, int partno,
 			goto out_del;
 	}
 
-#ifdef CONFIG_FIT_PARTITION
 	if (flags & ADDPART_FLAG_READONLY)
 		bdev->bd_read_only = true;
-#endif
 
 	/* everything is up and running, commence */
 	err = xa_insert(&disk->part_tbl, partno, bdev, GFP_KERNEL);
@@ -496,12 +516,28 @@ static bool partition_overlaps(struct gendisk *disk, sector_t start,
 int bdev_add_partition(struct gendisk *disk, int partno, sector_t start,
 		sector_t length)
 {
+	sector_t capacity = get_capacity(disk), end;
 	struct block_device *part;
 	int ret;
 
 	mutex_lock(&disk->open_mutex);
+	if (check_add_overflow(start, length, &end)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (start >= capacity || end > capacity) {
+		ret = -EINVAL;
+		goto out;
+	}
+
 	if (!disk_live(disk)) {
 		ret = -ENXIO;
+		goto out;
+	}
+
+	if (disk->flags & GENHD_FL_NO_PART) {
+		ret = -EINVAL;
 		goto out;
 	}
 
@@ -579,17 +615,6 @@ static bool disk_unlock_native_capacity(struct gendisk *disk)
 	return true;
 }
 
-void blk_drop_partitions(struct gendisk *disk)
-{
-	struct block_device *part;
-	unsigned long idx;
-
-	lockdep_assert_held(&disk->open_mutex);
-
-	xa_for_each_start(&disk->part_tbl, idx, part, 1)
-		delete_partition(part);
-}
-
 static bool blk_add_partition(struct gendisk *disk,
 		struct parsed_partitions *state, int p)
 {
@@ -627,20 +652,17 @@ static bool blk_add_partition(struct gendisk *disk,
 
 	part = add_partition(disk, p, from, size, state->parts[p].flags,
 			     &state->parts[p].info);
-	if (IS_ERR(part) && PTR_ERR(part) != -ENXIO) {
-		printk(KERN_ERR " %s: p%d could not be added: %ld\n",
-		       disk->disk_name, p, -PTR_ERR(part));
+	if (IS_ERR(part)) {
+		if (PTR_ERR(part) != -ENXIO) {
+			printk(KERN_ERR " %s: p%d could not be added: %pe\n",
+			       disk->disk_name, p, part);
+		}
 		return true;
 	}
 
 	if (IS_BUILTIN(CONFIG_BLK_DEV_MD) &&
 	    (state->parts[p].flags & ADDPART_FLAG_RAID))
 		md_autodetect_dev(part->bd_dev);
-
-#ifdef CONFIG_FIT_PARTITION
-	if ((state->parts[p].flags & ADDPART_FLAG_ROOTDEV) && ROOT_DEV == 0)
-		ROOT_DEV = part->bd_dev;
-#endif
 
 	return true;
 }
@@ -650,10 +672,7 @@ static int blk_add_partitions(struct gendisk *disk)
 	struct parsed_partitions *state;
 	int ret = -EAGAIN, p;
 
-	if (disk->flags & GENHD_FL_NO_PART)
-		return 0;
-
-	if (test_bit(GD_SUPPRESS_PART_SCAN, &disk->state))
+	if (!disk_has_partscan(disk))
 		return 0;
 
 	state = check_partition(disk);
@@ -711,6 +730,8 @@ out_free_state:
 
 int bdev_disk_changed(struct gendisk *disk, bool invalidate)
 {
+	struct block_device *part;
+	unsigned long idx;
 	int ret = 0;
 
 	lockdep_assert_held(&disk->open_mutex);
@@ -723,8 +744,9 @@ rescan:
 		return -EBUSY;
 	sync_blockdev(disk->part0);
 	invalidate_bdev(disk->part0);
-	blk_drop_partitions(disk);
 
+	xa_for_each_start(&disk->part_tbl, idx, part, 1)
+		delete_partition(part);
 	clear_bit(GD_NEED_PART_SCAN, &disk->state);
 
 	/*

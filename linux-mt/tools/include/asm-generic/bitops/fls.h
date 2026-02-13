@@ -12,7 +12,8 @@
  * Note fls(0) = 0, fls(1) = 1, fls(0x80000000) = 32.
  */
 
-static __always_inline int __generic_fls(unsigned int x)
+#define fls __linux_fls
+static __always_inline int fls(unsigned int x)
 {
 	int r = 32;
 
@@ -40,6 +41,5 @@ static __always_inline int __generic_fls(unsigned int x)
 	}
 	return r;
 }
-#define fls __generic_fls
 
 #endif /* _ASM_GENERIC_BITOPS_FLS_H_ */

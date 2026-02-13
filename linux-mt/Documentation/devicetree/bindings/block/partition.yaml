@@ -19,16 +19,17 @@ properties:
     pattern: '^block-partition-.+$'
 
   partnum:
+    $ref: /schemas/types.yaml#/definitions/uint32
     description:
       Matches partition by number if present.
 
   partname:
-    "$ref": "/schemas/types.yaml#/definitions/string"
+    $ref: /schemas/types.yaml#/definitions/string
     description:
       Matches partition by PARTNAME if present.
 
-  uuid:
-    "$ref": "/schemas/types.yaml#/definitions/string"
+  partuuid:
+    $ref: /schemas/types.yaml#/definitions/string
     description:
       Matches partition by PARTUUID if present.
 
@@ -39,12 +40,12 @@ properties:
 
 anyOf:
   - required:
-    - partnum
+      - partnum
 
   - required:
-    - partname
+      - partname
 
   - required:
-    - uuid
+      - partuuid
 
 unevaluatedProperties: false

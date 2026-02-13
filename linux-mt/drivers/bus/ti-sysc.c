@@ -110,6 +110,7 @@ static const char * const clock_names[SYSC_MAX_CLOCKS] = {
  * @cookie: data used by legacy platform callbacks
  * @name: name if available
  * @revision: interconnect target module revision
+ * @sysconfig: saved sysconfig register value
  * @reserved: target module is reserved and already in use
  * @enabled: sysc runtime enabled status
  * @needs_resume: runtime resume needed on resume from suspend
@@ -649,89 +650,21 @@ static int sysc_init_resets(struct sysc *ddata)
 static int sysc_parse_and_check_child_range(struct sysc *ddata)
 {
 	struct device_node *np = ddata->dev->of_node;
-	const __be32 *ranges;
-	u32 nr_addr, nr_size;
-	int len, error;
+	struct of_range_parser parser;
+	struct of_range range;
+	int error;
 
-	ranges = of_get_property(np, "ranges", &len);
-	if (!ranges) {
-		dev_err(ddata->dev, "missing ranges for %pOF\n", np);
-
-		return -ENOENT;
-	}
-
-	len /= sizeof(*ranges);
-
-	if (len < 3) {
-		dev_err(ddata->dev, "incomplete ranges for %pOF\n", np);
-
-		return -EINVAL;
-	}
-
-	error = of_property_read_u32(np, "#address-cells", &nr_addr);
+	error = of_range_parser_init(&parser, np);
 	if (error)
-		return -ENOENT;
+		return error;
 
-	error = of_property_read_u32(np, "#size-cells", &nr_size);
-	if (error)
-		return -ENOENT;
-
-	if (nr_addr != 1 || nr_size != 1) {
-		dev_err(ddata->dev, "invalid ranges for %pOF\n", np);
-
-		return -EINVAL;
+	for_each_of_range(&parser, &range) {
+		ddata->module_pa = range.cpu_addr;
+		ddata->module_size = range.size;
+		break;
 	}
-
-	ranges++;
-	ddata->module_pa = of_translate_address(np, ranges++);
-	ddata->module_size = be32_to_cpup(ranges);
 
 	return 0;
-}
-
-/* Interconnect instances to probe before l4_per instances */
-static struct resource early_bus_ranges[] = {
-	/* am3/4 l4_wkup */
-	{ .start = 0x44c00000, .end = 0x44c00000 + 0x300000, },
-	/* omap4/5 and dra7 l4_cfg */
-	{ .start = 0x4a000000, .end = 0x4a000000 + 0x300000, },
-	/* omap4 l4_wkup */
-	{ .start = 0x4a300000, .end = 0x4a300000 + 0x30000,  },
-	/* omap5 and dra7 l4_wkup without dra7 dcan segment */
-	{ .start = 0x4ae00000, .end = 0x4ae00000 + 0x30000,  },
-};
-
-static atomic_t sysc_defer = ATOMIC_INIT(10);
-
-/**
- * sysc_defer_non_critical - defer non_critical interconnect probing
- * @ddata: device driver data
- *
- * We want to probe l4_cfg and l4_wkup interconnect instances before any
- * l4_per instances as l4_per instances depend on resources on l4_cfg and
- * l4_wkup interconnects.
- */
-static int sysc_defer_non_critical(struct sysc *ddata)
-{
-	struct resource *res;
-	int i;
-
-	if (!atomic_read(&sysc_defer))
-		return 0;
-
-	for (i = 0; i < ARRAY_SIZE(early_bus_ranges); i++) {
-		res = &early_bus_ranges[i];
-		if (ddata->module_pa >= res->start &&
-		    ddata->module_pa <= res->end) {
-			atomic_set(&sysc_defer, 0);
-
-			return 0;
-		}
-	}
-
-	atomic_dec_if_positive(&sysc_defer);
-
-	return -EPROBE_DEFER;
 }
 
 static struct device_node *stdout_path;
@@ -914,7 +847,7 @@ static int sysc_check_registers(struct sysc *ddata)
  * within the interconnect target module range. For example, SGX has
  * them at offset 0x1fc00 in the 32MB module address space. And cpsw
  * has them at offset 0x1200 in the CPSW_WR child. Usually the
- * the interconnect target module registers are at the beginning of
+ * interconnect target module registers are at the beginning of
  * the module range though.
  */
 static int sysc_ioremap(struct sysc *ddata)
@@ -959,13 +892,9 @@ static int sysc_map_and_check_registers(struct sysc *ddata)
 	if (error)
 		return error;
 
-	error = sysc_defer_non_critical(ddata);
-	if (error)
-		return error;
-
 	sysc_check_children(ddata);
 
-	if (!of_get_property(np, "reg", NULL))
+	if (!of_property_present(np, "reg"))
 		return 0;
 
 	error = sysc_parse_registers(ddata);
@@ -1625,6 +1554,12 @@ static const struct sysc_revision_quirk sysc_revision_quirks[] = {
 		   SYSC_QUIRK_SWSUP_SIDLE | SYSC_QUIRK_SWSUP_MSTANDBY),
 	SYSC_QUIRK("usb_host_hs", 0, 0, 0x10, -ENODEV, 0x50700101, 0xffffffff,
 		   SYSC_QUIRK_SWSUP_SIDLE | SYSC_QUIRK_SWSUP_MSTANDBY),
+	SYSC_QUIRK("usb_otg_hs", 0, 0x400, 0x404, 0x408, 0x00000033,
+		   0xffffffff, SYSC_QUIRK_SWSUP_SIDLE | SYSC_QUIRK_SWSUP_MSTANDBY |
+		   SYSC_MODULE_QUIRK_OTG),
+	SYSC_QUIRK("usb_otg_hs", 0, 0x400, 0x404, 0x408, 0x00000040,
+		   0xffffffff, SYSC_QUIRK_SWSUP_SIDLE | SYSC_QUIRK_SWSUP_MSTANDBY |
+		   SYSC_MODULE_QUIRK_OTG),
 	SYSC_QUIRK("usb_otg_hs", 0, 0x400, 0x404, 0x408, 0x00000050,
 		   0xffffffff, SYSC_QUIRK_SWSUP_SIDLE | SYSC_QUIRK_SWSUP_MSTANDBY |
 		   SYSC_MODULE_QUIRK_OTG),
@@ -2299,11 +2234,9 @@ static int sysc_init_idlemode(struct sysc *ddata, u8 *idlemodes,
 			      const char *name)
 {
 	struct device_node *np = ddata->dev->of_node;
-	struct property *prop;
-	const __be32 *p;
 	u32 val;
 
-	of_property_for_each_u32(np, name, prop, p, val) {
+	of_property_for_each_u32(np, name, val) {
 		if (val >= SYSC_NR_IDLEMODES) {
 			dev_err(ddata->dev, "invalid idlemode: %i\n", val);
 			return -EINVAL;
@@ -2550,11 +2483,9 @@ static struct dev_pm_domain sysc_child_pm_domain = {
 static void sysc_reinit_modules(struct sysc_soc_info *soc)
 {
 	struct sysc_module *module;
-	struct list_head *pos;
 	struct sysc *ddata;
 
-	list_for_each(pos, &sysc_soc->restored_modules) {
-		module = list_entry(pos, struct sysc_module, node);
+	list_for_each_entry(module, &sysc_soc->restored_modules, node) {
 		ddata = module->ddata;
 		sysc_reinit_module(ddata, ddata->enabled);
 	}
@@ -3235,12 +3166,10 @@ static void sysc_cleanup_static_data(void)
 static int sysc_check_disabled_devices(struct sysc *ddata)
 {
 	struct sysc_address *disabled_module;
-	struct list_head *pos;
 	int error = 0;
 
 	mutex_lock(&sysc_soc->list_lock);
-	list_for_each(pos, &sysc_soc->disabled_modules) {
-		disabled_module = list_entry(pos, struct sysc_address, node);
+	list_for_each_entry(disabled_module, &sysc_soc->disabled_modules, node) {
 		if (ddata->module_pa == disabled_module->base) {
 			dev_dbg(ddata->dev, "module disabled for this SoC\n");
 			error = -ENODEV;

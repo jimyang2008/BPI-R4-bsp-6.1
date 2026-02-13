@@ -1666,13 +1666,13 @@ static bool brcmstb_nand_wait_for_completion(struct nand_chip *chip)
 		disable_ctrl_irqs(ctrl);
 		sts = bcmnand_ctrl_poll_status(ctrl, NAND_CTRL_RDY,
 					       NAND_CTRL_RDY, 0);
-		err = (sts < 0) ? true : false;
+		err = sts < 0;
 	} else {
 		unsigned long timeo = msecs_to_jiffies(
 						NAND_POLL_STATUS_TIMEOUT_MS);
 		/* wait for completion interrupt */
 		sts = wait_for_completion_timeout(&ctrl->done, timeo);
-		err = (sts <= 0) ? true : false;
+		err = !sts;
 	}
 
 	return err;
@@ -1688,6 +1688,7 @@ static int brcmnand_waitfunc(struct nand_chip *chip)
 	if (ctrl->cmd_pending)
 		err = brcmstb_nand_wait_for_completion(chip);
 
+	ctrl->cmd_pending = 0;
 	if (err) {
 		u32 cmd = brcmnand_read_reg(ctrl, BRCMNAND_CMD_START)
 					>> brcmnand_cmd_shift(ctrl);
@@ -1696,8 +1697,8 @@ static int brcmnand_waitfunc(struct nand_chip *chip)
 			"timeout waiting for command %#02x\n", cmd);
 		dev_err_ratelimited(ctrl->dev, "intfc status %08x\n",
 			brcmnand_read_reg(ctrl, BRCMNAND_INTFC_STATUS));
+		return -ETIMEDOUT;
 	}
-	ctrl->cmd_pending = 0;
 	return brcmnand_read_reg(ctrl, BRCMNAND_INTFC_STATUS) &
 				 INTFC_FLASH_STATUS;
 }
@@ -2449,6 +2450,11 @@ static int brcmnand_write(struct mtd_info *mtd, struct nand_chip *chip,
 		brcmnand_send_cmd(host, CMD_PROGRAM_PAGE);
 		status = brcmnand_waitfunc(chip);
 
+		if (status < 0) {
+			ret = status;
+			goto out;
+		}
+
 		if (status & NAND_STATUS_FAIL) {
 			dev_info(ctrl->dev, "program failed at %llx\n",
 				(unsigned long long)addr);
@@ -2968,7 +2974,7 @@ static int brcmnand_resume(struct device *dev)
 		brcmnand_save_restore_cs_config(host, 1);
 
 		/* Reset the chip, required by some chips after power-up */
-		nand_reset_op(chip);
+		nand_reset(chip, 0);
 	}
 
 	return 0;
@@ -3188,6 +3194,10 @@ int brcmnand_probe(struct platform_device *pdev, struct brcmnand_soc *soc)
 	/* Disable XOR addressing */
 	brcmnand_rmw_reg(ctrl, BRCMNAND_CS_XOR, 0xff, 0, 0);
 
+	/* Check if the board connects the WP pin */
+	if (of_property_read_bool(dn, "brcm,wp-not-connected"))
+		wp_on = 0;
+
 	if (ctrl->features & BRCMNAND_HAS_WP) {
 		/* Permanently disable write protection */
 		if (wp_on == 2)
@@ -3245,6 +3255,10 @@ int brcmnand_probe(struct platform_device *pdev, struct brcmnand_soc *soc)
 
 			ret = brcmnand_init_cs(host, NULL);
 			if (ret) {
+				if (ret == -EPROBE_DEFER) {
+					of_node_put(child);
+					goto err;
+				}
 				devm_kfree(dev, host);
 				continue; /* Try all chip-selects */
 			}

@@ -20,6 +20,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
 #include <linux/regmap.h>
+#include <linux/units.h>
 
 #include <linux/iio/buffer.h>
 #include <linux/iio/events.h>
@@ -159,7 +160,6 @@ struct fxls8962af_chip_info {
 struct fxls8962af_data {
 	struct regmap *regmap;
 	const struct fxls8962af_chip_info *chip_info;
-	struct regulator *vdd_reg;
 	struct {
 		__le16 channels[3];
 		s64 ts __aligned(8);
@@ -435,8 +435,16 @@ static int fxls8962af_read_raw(struct iio_dev *indio_dev,
 		*val = FXLS8962AF_TEMP_CENTER_VAL;
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SCALE:
-		*val = 0;
-		return fxls8962af_read_full_scale(data, val2);
+		switch (chan->type) {
+		case IIO_TEMP:
+			*val = MILLIDEGREE_PER_DEGREE;
+			return IIO_VAL_INT;
+		case IIO_ACCEL:
+			*val = 0;
+			return fxls8962af_read_full_scale(data, val2);
+		default:
+			return -EINVAL;
+		}
 	case IIO_CHAN_INFO_SAMP_FREQ:
 		return fxls8962af_read_samp_freq(data, val, val2);
 	default:
@@ -735,9 +743,11 @@ static const struct iio_event_spec fxls8962af_event[] = {
 	.type = IIO_TEMP, \
 	.address = FXLS8962AF_TEMP_OUT, \
 	.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) | \
+			      BIT(IIO_CHAN_INFO_SCALE) | \
 			      BIT(IIO_CHAN_INFO_OFFSET),\
 	.scan_index = -1, \
 	.scan_type = { \
+		.sign = 's', \
 		.realbits = 8, \
 		.storagebits = 8, \
 	}, \
@@ -854,6 +864,8 @@ static int fxls8962af_buffer_predisable(struct iio_dev *indio_dev)
 				 FXLS8962AF_INT_EN_BUF_EN, 0);
 	if (ret)
 		return ret;
+
+	synchronize_irq(data->irq);
 
 	ret = __fxls8962af_fifo_set_mode(data, false);
 
@@ -1051,13 +1063,6 @@ static irqreturn_t fxls8962af_interrupt(int irq, void *p)
 	return IRQ_NONE;
 }
 
-static void fxls8962af_regulator_disable(void *data_ptr)
-{
-	struct fxls8962af_data *data = data_ptr;
-
-	regulator_disable(data->vdd_reg);
-}
-
 static void fxls8962af_pm_disable(void *dev_ptr)
 {
 	struct device *dev = dev_ptr;
@@ -1171,20 +1176,10 @@ int fxls8962af_core_probe(struct device *dev, struct regmap *regmap, int irq)
 	if (ret)
 		return ret;
 
-	data->vdd_reg = devm_regulator_get(dev, "vdd");
-	if (IS_ERR(data->vdd_reg))
-		return dev_err_probe(dev, PTR_ERR(data->vdd_reg),
-				     "Failed to get vdd regulator\n");
-
-	ret = regulator_enable(data->vdd_reg);
-	if (ret) {
-		dev_err(dev, "Failed to enable vdd regulator: %d\n", ret);
-		return ret;
-	}
-
-	ret = devm_add_action_or_reset(dev, fxls8962af_regulator_disable, data);
+	ret = devm_regulator_get_enable(dev, "vdd");
 	if (ret)
-		return ret;
+		return dev_err_probe(dev, ret,
+				     "Failed to get vdd regulator\n");
 
 	ret = regmap_read(data->regmap, FXLS8962AF_WHO_AM_I, &reg);
 	if (ret)
@@ -1241,7 +1236,7 @@ int fxls8962af_core_probe(struct device *dev, struct regmap *regmap, int irq)
 }
 EXPORT_SYMBOL_NS_GPL(fxls8962af_core_probe, IIO_FXLS8962AF);
 
-static int __maybe_unused fxls8962af_runtime_suspend(struct device *dev)
+static int fxls8962af_runtime_suspend(struct device *dev)
 {
 	struct fxls8962af_data *data = iio_priv(dev_get_drvdata(dev));
 	int ret;
@@ -1255,14 +1250,14 @@ static int __maybe_unused fxls8962af_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused fxls8962af_runtime_resume(struct device *dev)
+static int fxls8962af_runtime_resume(struct device *dev)
 {
 	struct fxls8962af_data *data = iio_priv(dev_get_drvdata(dev));
 
 	return fxls8962af_active(data);
 }
 
-static int __maybe_unused fxls8962af_suspend(struct device *dev)
+static int fxls8962af_suspend(struct device *dev)
 {
 	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct fxls8962af_data *data = iio_priv(indio_dev);
@@ -1283,7 +1278,7 @@ static int __maybe_unused fxls8962af_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused fxls8962af_resume(struct device *dev)
+static int fxls8962af_resume(struct device *dev)
 {
 	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct fxls8962af_data *data = iio_priv(indio_dev);
@@ -1300,12 +1295,10 @@ static int __maybe_unused fxls8962af_resume(struct device *dev)
 	return 0;
 }
 
-const struct dev_pm_ops fxls8962af_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(fxls8962af_suspend, fxls8962af_resume)
-	SET_RUNTIME_PM_OPS(fxls8962af_runtime_suspend,
-			   fxls8962af_runtime_resume, NULL)
+EXPORT_NS_GPL_DEV_PM_OPS(fxls8962af_pm_ops, IIO_FXLS8962AF) = {
+	SYSTEM_SLEEP_PM_OPS(fxls8962af_suspend, fxls8962af_resume)
+	RUNTIME_PM_OPS(fxls8962af_runtime_suspend, fxls8962af_runtime_resume, NULL)
 };
-EXPORT_SYMBOL_NS_GPL(fxls8962af_pm_ops, IIO_FXLS8962AF);
 
 MODULE_AUTHOR("Sean Nyekjaer <sean@geanix.com>");
 MODULE_DESCRIPTION("NXP FXLS8962AF/FXLS8964AF accelerometer driver");

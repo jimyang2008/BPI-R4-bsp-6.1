@@ -55,8 +55,10 @@
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
 #include <linux/crc32poly.h>
+#include <linux/dmi.h>
 
 #include <net/checksum.h>
+#include <net/gso.h>
 #include <net/ip.h>
 
 #include <linux/io.h>
@@ -1538,8 +1540,7 @@ static int tg3_mdio_init(struct tg3 *tp)
 		return -ENOMEM;
 
 	tp->mdio_bus->name     = "tg3 mdio bus";
-	snprintf(tp->mdio_bus->id, MII_BUS_ID_SIZE, "%x",
-		 (tp->pdev->bus->number << 8) | tp->pdev->devfn);
+	snprintf(tp->mdio_bus->id, MII_BUS_ID_SIZE, "%x", pci_dev_id(tp->pdev));
 	tp->mdio_bus->priv     = tp;
 	tp->mdio_bus->parent   = &tp->pdev->dev;
 	tp->mdio_bus->read     = &tg3_mdio_read;
@@ -2338,10 +2339,10 @@ static void tg3_phy_apply_otp(struct tg3 *tp)
 	tg3_phy_toggle_auxctl_smdsp(tp, false);
 }
 
-static void tg3_eee_pull_config(struct tg3 *tp, struct ethtool_eee *eee)
+static void tg3_eee_pull_config(struct tg3 *tp, struct ethtool_keee *eee)
 {
 	u32 val;
-	struct ethtool_eee *dest = &tp->eee;
+	struct ethtool_keee *dest = &tp->eee;
 
 	if (!(tp->phy_flags & TG3_PHYFLG_EEE_CAP))
 		return;
@@ -2362,13 +2363,13 @@ static void tg3_eee_pull_config(struct tg3 *tp, struct ethtool_eee *eee)
 	/* Pull lp advertised settings */
 	if (tg3_phy_cl45_read(tp, MDIO_MMD_AN, MDIO_AN_EEE_LPABLE, &val))
 		return;
-	dest->lp_advertised = mmd_eee_adv_to_ethtool_adv_t(val);
+	dest->lp_advertised_u32 = mmd_eee_adv_to_ethtool_adv_t(val);
 
 	/* Pull advertised and eee_enabled settings */
 	if (tg3_phy_cl45_read(tp, MDIO_MMD_AN, MDIO_AN_EEE_ADV, &val))
 		return;
 	dest->eee_enabled = !!val;
-	dest->advertised = mmd_eee_adv_to_ethtool_adv_t(val);
+	dest->advertised_u32 = mmd_eee_adv_to_ethtool_adv_t(val);
 
 	/* Pull tx_lpi_enabled */
 	val = tr32(TG3_CPMU_EEE_MODE);
@@ -4364,9 +4365,9 @@ static int tg3_phy_autoneg_cfg(struct tg3 *tp, u32 advertise, u32 flowctrl)
 
 		if (!tp->eee.eee_enabled) {
 			val = 0;
-			tp->eee.advertised = 0;
+			tp->eee.advertised_u32 = 0;
 		} else {
-			tp->eee.advertised = advertise &
+			tp->eee.advertised_u32 = advertise &
 					     (ADVERTISED_100baseT_Full |
 					      ADVERTISED_1000baseT_Full);
 		}
@@ -4618,7 +4619,7 @@ static int tg3_init_5401phy_dsp(struct tg3 *tp)
 
 static bool tg3_phy_eee_config_ok(struct tg3 *tp)
 {
-	struct ethtool_eee eee;
+	struct ethtool_keee eee;
 
 	if (!(tp->phy_flags & TG3_PHYFLG_EEE_CAP))
 		return true;
@@ -4626,13 +4627,13 @@ static bool tg3_phy_eee_config_ok(struct tg3 *tp)
 	tg3_eee_pull_config(tp, &eee);
 
 	if (tp->eee.eee_enabled) {
-		if (tp->eee.advertised != eee.advertised ||
+		if (tp->eee.advertised_u32 != eee.advertised_u32 ||
 		    tp->eee.tx_lpi_timer != eee.tx_lpi_timer ||
 		    tp->eee.tx_lpi_enabled != eee.tx_lpi_enabled)
 			return false;
 	} else {
 		/* EEE is disabled but we're advertising */
-		if (eee.advertised)
+		if (eee.advertised_u32)
 			return false;
 	}
 
@@ -6180,34 +6181,26 @@ static int tg3_get_ts_info(struct net_device *dev, struct ethtool_ts_info *info)
 	return 0;
 }
 
-static int tg3_ptp_adjfreq(struct ptp_clock_info *ptp, s32 ppb)
+static int tg3_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
 {
 	struct tg3 *tp = container_of(ptp, struct tg3, ptp_info);
-	bool neg_adj = false;
-	u32 correction = 0;
-
-	if (ppb < 0) {
-		neg_adj = true;
-		ppb = -ppb;
-	}
+	u64 correction;
+	bool neg_adj;
 
 	/* Frequency adjustment is performed using hardware with a 24 bit
 	 * accumulator and a programmable correction value. On each clk, the
 	 * correction value gets added to the accumulator and when it
 	 * overflows, the time counter is incremented/decremented.
-	 *
-	 * So conversion from ppb to correction value is
-	 *		ppb * (1 << 24) / 1000000000
 	 */
-	correction = div_u64((u64)ppb * (1 << 24), 1000000000ULL) &
-		     TG3_EAV_REF_CLK_CORRECT_MASK;
+	neg_adj = diff_by_scaled_ppm(1 << 24, scaled_ppm, &correction);
 
 	tg3_full_lock(tp, 0);
 
 	if (correction)
 		tw32(TG3_EAV_REF_CLK_CORRECT_CTL,
 		     TG3_EAV_REF_CLK_CORRECT_EN |
-		     (neg_adj ? TG3_EAV_REF_CLK_CORRECT_NEG : 0) | correction);
+		     (neg_adj ? TG3_EAV_REF_CLK_CORRECT_NEG : 0) |
+		     ((u32)correction & TG3_EAV_REF_CLK_CORRECT_MASK));
 	else
 		tw32(TG3_EAV_REF_CLK_CORRECT_CTL, 0);
 
@@ -6331,7 +6324,7 @@ static const struct ptp_clock_info tg3_ptp_caps = {
 	.n_per_out	= 1,
 	.n_pins		= 0,
 	.pps		= 0,
-	.adjfreq	= tg3_ptp_adjfreq,
+	.adjfine	= tg3_ptp_adjfine,
 	.adjtime	= tg3_ptp_adjtime,
 	.gettimex64	= tg3_ptp_gettimex,
 	.settime64	= tg3_ptp_settime,
@@ -6446,6 +6439,14 @@ static void tg3_dump_state(struct tg3 *tp)
 {
 	int i;
 	u32 *regs;
+
+	/* If it is a PCI error, all registers will be 0xffff,
+	 * we don't dump them out, just report the error and return
+	 */
+	if (tp->pdev->error_state != pci_channel_io_normal) {
+		netdev_err(tp->dev, "PCI channel ERROR!\n");
+		return;
+	}
 
 	regs = kzalloc(TG3_REG_BLK_SIZE, GFP_ATOMIC);
 	if (!regs)
@@ -6888,7 +6889,10 @@ static int tg3_rx(struct tg3_napi *tnapi, int budget)
 
 			ri->data = NULL;
 
-			skb = build_skb(data, frag_size);
+			if (frag_size)
+				skb = build_skb(data, frag_size);
+			else
+				skb = slab_build_skb(data);
 			if (!skb) {
 				tg3_frag_free(frag_size != 0, data);
 				goto drop_it_no_recycle;
@@ -11184,7 +11188,8 @@ static void tg3_reset_task(struct work_struct *work)
 	rtnl_lock();
 	tg3_full_lock(tp, 0);
 
-	if (tp->pcierr_recovery || !netif_running(tp->dev)) {
+	if (tp->pcierr_recovery || !netif_running(tp->dev) ||
+	    tp->pdev->error_state != pci_channel_io_normal) {
 		tg3_flag_clear(tp, RESET_TASK_PENDING);
 		tg3_full_unlock(tp);
 		rtnl_unlock();
@@ -14096,7 +14101,7 @@ static int tg3_set_coalesce(struct net_device *dev,
 	return 0;
 }
 
-static int tg3_set_eee(struct net_device *dev, struct ethtool_eee *edata)
+static int tg3_set_eee(struct net_device *dev, struct ethtool_keee *edata)
 {
 	struct tg3 *tp = netdev_priv(dev);
 
@@ -14105,7 +14110,7 @@ static int tg3_set_eee(struct net_device *dev, struct ethtool_eee *edata)
 		return -EOPNOTSUPP;
 	}
 
-	if (edata->advertised != tp->eee.advertised) {
+	if (edata->advertised_u32 != tp->eee.advertised_u32) {
 		netdev_warn(tp->dev,
 			    "Direct manipulation of EEE advertisement is not supported\n");
 		return -EINVAL;
@@ -14133,7 +14138,7 @@ static int tg3_set_eee(struct net_device *dev, struct ethtool_eee *edata)
 	return 0;
 }
 
-static int tg3_get_eee(struct net_device *dev, struct ethtool_eee *edata)
+static int tg3_get_eee(struct net_device *dev, struct ethtool_keee *edata)
 {
 	struct tg3 *tp = netdev_priv(dev);
 
@@ -15571,10 +15576,10 @@ static int tg3_phy_probe(struct tg3 *tp)
 	      tg3_chip_rev_id(tp) != CHIPREV_ID_57765_A0))) {
 		tp->phy_flags |= TG3_PHYFLG_EEE_CAP;
 
-		tp->eee.supported = SUPPORTED_100baseT_Full |
-				    SUPPORTED_1000baseT_Full;
-		tp->eee.advertised = ADVERTISED_100baseT_Full |
-				     ADVERTISED_1000baseT_Full;
+		tp->eee.supported_u32 = SUPPORTED_100baseT_Full |
+					SUPPORTED_1000baseT_Full;
+		tp->eee.advertised_u32 = ADVERTISED_100baseT_Full |
+					 ADVERTISED_1000baseT_Full;
 		tp->eee.eee_enabled = 1;
 		tp->eee.tx_lpi_enabled = 1;
 		tp->eee.tx_lpi_timer = TG3_CPMU_DBTMR1_LNKIDLE_2047US;
@@ -17727,6 +17732,11 @@ static int tg3_init_one(struct pci_dev *pdev,
 	} else
 		persist_dma_mask = dma_mask = DMA_BIT_MASK(64);
 
+	if (tg3_asic_rev(tp) == ASIC_REV_57766) {
+		dma_mask = DMA_BIT_MASK(32);
+		persist_dma_mask = DMA_BIT_MASK(31);
+	}
+
 	/* Configure DMA attributes. */
 	if (dma_mask > DMA_BIT_MASK(32)) {
 		err = dma_set_mask(&pdev->dev, dma_mask);
@@ -17829,10 +17839,7 @@ static int tg3_init_one(struct pci_dev *pdev,
 		tnapi->tx_pending = TG3_DEF_TX_RING_PENDING;
 
 		tnapi->int_mbox = intmbx;
-		if (i <= 4)
-			intmbx += 0x8;
-		else
-			intmbx += 0x4;
+		intmbx += 0x8;
 
 		tnapi->consmbox = rcvmbx;
 		tnapi->prodmbox = sndmbx;
@@ -18102,6 +18109,50 @@ unlock:
 
 static SIMPLE_DEV_PM_OPS(tg3_pm_ops, tg3_suspend, tg3_resume);
 
+/* Systems where ACPI _PTS (Prepare To Sleep) S5 will result in a fatal
+ * PCIe AER event on the tg3 device if the tg3 device is not, or cannot
+ * be, powered down.
+ */
+static const struct dmi_system_id tg3_restart_aer_quirk_table[] = {
+	{
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "PowerEdge R440"),
+		},
+	},
+	{
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "PowerEdge R540"),
+		},
+	},
+	{
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "PowerEdge R640"),
+		},
+	},
+	{
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "PowerEdge R650"),
+		},
+	},
+	{
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "PowerEdge R740"),
+		},
+	},
+	{
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "PowerEdge R750"),
+		},
+	},
+	{}
+};
+
 static void tg3_shutdown(struct pci_dev *pdev)
 {
 	struct net_device *dev = pci_get_drvdata(pdev);
@@ -18118,6 +18169,19 @@ static void tg3_shutdown(struct pci_dev *pdev)
 
 	if (system_state == SYSTEM_POWER_OFF)
 		tg3_power_down(tp);
+	else if (system_state == SYSTEM_RESTART &&
+		 dmi_first_match(tg3_restart_aer_quirk_table) &&
+		 pdev->current_state != PCI_D3cold &&
+		 pdev->current_state != PCI_UNKNOWN) {
+		/* Disable PCIe AER on the tg3 to avoid a fatal
+		 * error during this system restart.
+		 */
+		pcie_capability_clear_word(pdev, PCI_EXP_DEVCTL,
+					   PCI_EXP_DEVCTL_CERE |
+					   PCI_EXP_DEVCTL_NFERE |
+					   PCI_EXP_DEVCTL_FERE |
+					   PCI_EXP_DEVCTL_URRE);
+	}
 
 	rtnl_unlock();
 

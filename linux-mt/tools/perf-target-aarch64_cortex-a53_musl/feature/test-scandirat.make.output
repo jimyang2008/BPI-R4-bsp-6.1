@@ -1,0 +1,6 @@
+test-scandirat.c: In function 'main':
+test-scandirat.c:10:16: error: implicit declaration of function 'scandirat'; did you mean 'scandir'? [-Werror=implicit-function-declaration]
+   10 |         return scandirat(/*dirfd=*/ 0, /*dirp=*/ (void *)1, /*namelist=*/ (void *)2, /*filter=*/ (void *)3, /*compar=*/ (void *)4);
+      |                ^~~~~~~~~
+      |                scandir
+cc1: all warnings being treated as errors

@@ -582,9 +582,11 @@ static int zpa2326_fill_sample_buffer(struct iio_dev               *indio_dev,
 	struct {
 		u32 pressure;
 		u16 temperature;
-		u64 timestamp;
+		aligned_s64 timestamp;
 	}   sample;
 	int err;
+
+	memset(&sample, 0, sizeof(sample));
 
 	if (test_bit(0, indio_dev->active_scan_mask)) {
 		/* Get current pressure from hardware FIFO. */
@@ -829,7 +831,7 @@ static irqreturn_t zpa2326_handle_threaded_irq(int irq, void *data)
 	}
 
 	/* New sample available: dispatch internal trigger consumers. */
-	iio_trigger_poll_chained(priv->trigger);
+	iio_trigger_poll_nested(priv->trigger);
 
 	if (cont)
 		/*

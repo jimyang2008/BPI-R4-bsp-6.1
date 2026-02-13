@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
-#include <linux/of_platform.h>
+#include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/reset.h>
 #include <net/dsa.h>
 
 #include "mt7530.h"
+#include "mt7530_nl.h"
 
 static const struct of_device_id mt7988_of_match[] = {
 	{ .compatible = "mediatek,mt7988-switch", .data = &mt753x_table[ID_MT7988], },
@@ -59,18 +61,30 @@ mt7988_probe(struct platform_device *pdev)
 	if (IS_ERR(priv->regmap))
 		return PTR_ERR(priv->regmap);
 
-	return dsa_register_switch(priv->ds);
+	ret = dsa_register_switch(priv->ds);
+	if (ret) {
+		dev_err(&pdev->dev, "Failed to register DSA switch: %d\n", ret);
+		return ret;
+	}
+
+	ret = mt7530_nl_init(&priv);
+	if (ret) {
+		dev_err(&pdev->dev, "Failed to initialize netlink with DSA: %d\n", ret);
+		dsa_unregister_switch(priv->ds);
+		return ret;
+	}
+
+	return 0;
 }
 
-static int
-mt7988_remove(struct platform_device *pdev)
+static void mt7988_remove(struct platform_device *pdev)
 {
 	struct mt7530_priv *priv = platform_get_drvdata(pdev);
 
 	if (priv)
 		mt7530_remove_common(priv);
 
-	return 0;
+	mt7530_nl_exit();
 }
 
 static void mt7988_shutdown(struct platform_device *pdev)
@@ -87,7 +101,7 @@ static void mt7988_shutdown(struct platform_device *pdev)
 
 static struct platform_driver mt7988_platform_driver = {
 	.probe  = mt7988_probe,
-	.remove = mt7988_remove,
+	.remove_new = mt7988_remove,
 	.shutdown = mt7988_shutdown,
 	.driver = {
 		.name = "mt7530-mmio",

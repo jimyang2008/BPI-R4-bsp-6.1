@@ -115,9 +115,9 @@ struct fitblk {
 	bool			dead;
 };
 
-static int fitblk_open(struct block_device *bdev, fmode_t mode)
+static int fitblk_open(struct gendisk *disk, fmode_t mode)
 {
-	struct fitblk *fitblk = bdev->bd_disk->private_data;
+	struct fitblk *fitblk = disk->private_data;
 
 	if (fitblk->dead)
 		return -ENOENT;
@@ -125,7 +125,7 @@ static int fitblk_open(struct block_device *bdev, fmode_t mode)
 	return 0;
 }
 
-static void fitblk_release(struct gendisk *disk, fmode_t mode)
+static void fitblk_release(struct gendisk *disk)
 {
 	return;
 }
@@ -199,7 +199,7 @@ static void fitblk_purge(struct work_struct *work)
 
 	if (refcount_dec_if_one(&num_devs)) {
 		sysfs_remove_link(&pdev->dev.kobj, "lower_dev");
-		blkdev_put(fitblk->lower_bdev, FMODE_READ | FMODE_EXCL);
+		blkdev_put(fitblk->lower_bdev, &_fitblk_claim_ptr);
 	}
 
 	kfree(fitblk);
@@ -289,6 +289,29 @@ out_unlock:
 	return err;
 }
 
+static void fitblk_mark_dead(struct block_device *bdev, bool surprise)
+{
+	struct list_head *n, *tmp;
+	struct fitblk *fitblk;
+
+	mutex_lock(&devices_mutex);
+	list_for_each_safe(n, tmp, &fitblk_devices) {
+		fitblk = list_entry(n, struct fitblk, list);
+		if (fitblk->lower_bdev != bdev)
+			continue;
+
+		fitblk->dead = true;
+		list_del(&fitblk->list);
+		/* removal needs to be deferred to avoid deadlock */
+		schedule_work(&fitblk->remove_work);
+	}
+	mutex_unlock(&devices_mutex);
+}
+
+static const struct blk_holder_ops fitblk_hops = {
+	.mark_dead = fitblk_mark_dead,
+};
+
 static int parse_fit_on_dev(struct device *dev)
 {
 	struct block_device *bdev;
@@ -317,7 +340,7 @@ static int parse_fit_on_dev(struct device *dev)
 	unsigned int slot = 0;
 
 	/* Exclusive open the block device to receive holder notifications */
-	bdev = blkdev_get_by_dev(dev->devt, FMODE_READ | FMODE_EXCL, &_fitblk_claim_ptr);
+	bdev = blkdev_get_by_dev(dev->devt, BLK_OPEN_READ, &_fitblk_claim_ptr, &fitblk_hops);
 	if (!bdev)
 		return -ENODEV;
 
@@ -370,7 +393,8 @@ static int parse_fit_on_dev(struct device *dev)
 	bytes_left = size;
 	fit_c = fit;
 	while (bytes_left > 0) {
-		bytes_to_copy = min(bytes_left, folio_size(folio) - offset_in_folio(folio, 0));
+		bytes_to_copy = min_t(size_t, bytes_left,
+				     folio_size(folio) - offset_in_folio(folio, 0));
 		memcpy(fit_c, pre_fit, bytes_to_copy);
 		fit_c += bytes_to_copy;
 		bytes_left -= bytes_to_copy;
@@ -437,6 +461,11 @@ static int parse_fit_on_dev(struct device *dev)
 	config_loadables = fdt_getprop(fit, node, FIT_LOADABLE_PROP,
 				       &config_loadables_len);
 
+	/* when ramdisk is mounted as rootfs, its image type is ramdisk,
+	   and performing the same function as loadable */
+	if (!config_loadables)
+		config_loadables = fdt_getprop(fit, node, FIT_RAMDISK_PROP, &config_loadables_len);
+
 	pr_info("FIT: %s configuration: \"%.*s\"%s%.*s%s\n",
 		bootconf ? "Selected" : "Default",
 		bootconf ? bootconf_len : config_default_len,
@@ -493,8 +522,9 @@ static int parse_fit_on_dev(struct device *dev)
 			image_description ? image_description_len : 0,
 			image_description ?: "", image_description ? ") " : "");
 
-		/* only 'filesystem' images should be mapped as partitions */
-		if (strncmp(image_type, FIT_FILESYSTEM_PROP, image_type_len))
+		/* only 'filesystem' or 'ramdisk' images should be mapped as partitions */
+		if (strncmp(image_type, FIT_FILESYSTEM_PROP, image_type_len) &&
+		    strncmp(image_type, FIT_RAMDISK_PROP, image_type_len))
 			continue;
 
 		/* check if sub-image is part of configured loadables */
@@ -548,27 +578,41 @@ static int parse_fit_on_dev(struct device *dev)
 		add_fit_subimage_device(bdev, slot++, start_sect, nr_sects, true);
 	}
 
-	if (!found || !slot)
+	if (!slot)
 		goto out_bootconf;
 
 	dev_info(dev, "mapped %u uImage.FIT filesystem sub-image%s as /dev/fit%s%u%s\n",
 		 slot, (slot > 1)?"s":"", (slot > 1)?"[0...":"", slot - 1,
 		 (slot > 1)?"]":"");
 
+	np = of_find_node_by_path("/");
+	if (np) {
+		if (of_property_read_bool(np, "mediatek,no-split-fitrw"))
+			goto out_bootconf;
+	}
+
 	/* in case uImage.FIT is stored in a partition, map the remaining space */
-	if (!bdev->bd_read_only && bdev_is_partition(bdev) &&
+	/* [MTK fixed] - Remove bdev_is_partition for nor flash fitrw
+	 * Nand and nor flash are not able to create /dev/fitrw due to
+	 * they are regarded as one whole partition (bd_partno = 0).
+	 * This will make /dev/fitrw build fail and overlayfs cannot
+	 * be mounted on rootfs_data correctly. This patch aims to
+	 * remove condition which blocks building fitrw device with
+	 * nand/nor device.
+	 */
+	if (!bdev->bd_read_only &&
 	    (imgmaxsect + MIN_FREE_SECT) < dsectors) {
 		add_fit_subimage_device(bdev, slot++, imgmaxsect,
 					dsectors - imgmaxsect, false);
-		dev_info(dev, "mapped remaing space as /dev/fitrw\n");
+		dev_info(dev, "mapped remaining space as /dev/fitrw\n");
 	}
 
 out_bootconf:
 	kfree(bootconf);
 	kfree(fit);
 out_blkdev:
-	if (!found || ret)
-		blkdev_put(bdev, FMODE_READ | FMODE_EXCL);
+	if (!slot)
+		blkdev_put(bdev, &_fitblk_claim_ptr);
 
 	return ret;
 }
@@ -606,7 +650,6 @@ static struct platform_driver fitblk_driver = {
 	.probe		= fitblk_probe,
 	.driver		= {
 		.name   = "fitblk",
-		.owner   = THIS_MODULE,
 	},
 };
 

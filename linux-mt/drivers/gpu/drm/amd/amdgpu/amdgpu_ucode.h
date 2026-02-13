@@ -125,6 +125,7 @@ enum psp_fw_type {
 	PSP_FW_TYPE_PSP_INTF_DRV,
 	PSP_FW_TYPE_PSP_DBG_DRV,
 	PSP_FW_TYPE_PSP_RAS_DRV,
+	PSP_FW_TYPE_MAX_INDEX,
 };
 
 /* version_major=2, version_minor=0 */
@@ -535,14 +536,19 @@ struct amdgpu_firmware {
 	uint64_t fw_buf_mc;
 };
 
+struct kicker_device{
+	unsigned short device;
+	u8 revision;
+};
+
 void amdgpu_ucode_print_mc_hdr(const struct common_firmware_header *hdr);
 void amdgpu_ucode_print_smc_hdr(const struct common_firmware_header *hdr);
+void amdgpu_ucode_print_imu_hdr(const struct common_firmware_header *hdr);
 void amdgpu_ucode_print_gfx_hdr(const struct common_firmware_header *hdr);
 void amdgpu_ucode_print_rlc_hdr(const struct common_firmware_header *hdr);
 void amdgpu_ucode_print_sdma_hdr(const struct common_firmware_header *hdr);
 void amdgpu_ucode_print_psp_hdr(const struct common_firmware_header *hdr);
 void amdgpu_ucode_print_gpu_info_hdr(const struct common_firmware_header *hdr);
-int amdgpu_ucode_validate(const struct firmware *fw);
 int amdgpu_ucode_request(struct amdgpu_device *adev, const struct firmware **fw,
 			 const char *fw_name);
 void amdgpu_ucode_release(const struct firmware **fw);
@@ -561,5 +567,6 @@ amdgpu_ucode_get_load_type(struct amdgpu_device *adev, int load_type);
 const char *amdgpu_ucode_name(enum AMDGPU_UCODE_ID ucode_id);
 
 void amdgpu_ucode_ip_version_decode(struct amdgpu_device *adev, int block_type, char *ucode_prefix, int len);
+bool amdgpu_is_kicker_fw(struct amdgpu_device *adev);
 
 #endif

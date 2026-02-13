@@ -673,6 +673,48 @@ static int marvell_config_aneg_fiber(struct phy_device *phydev)
 	return genphy_check_and_restart_aneg(phydev, changed);
 }
 
+static unsigned int m88e1111_inband_caps(struct phy_device *phydev,
+					 phy_interface_t interface)
+{
+	/* In 1000base-X and SGMII modes, the inband mode can be changed
+	 * through the Fibre page BMCR ANENABLE bit.
+	 */
+	if (interface == PHY_INTERFACE_MODE_1000BASEX ||
+	    interface == PHY_INTERFACE_MODE_SGMII)
+		return LINK_INBAND_DISABLE | LINK_INBAND_ENABLE |
+		       LINK_INBAND_BYPASS;
+
+	return 0;
+}
+
+static int m88e1111_config_inband(struct phy_device *phydev, unsigned int modes)
+{
+	u16 extsr, bmcr;
+	int err;
+
+	if (phydev->interface != PHY_INTERFACE_MODE_1000BASEX &&
+	    phydev->interface != PHY_INTERFACE_MODE_SGMII)
+		return -EINVAL;
+
+	if (modes == LINK_INBAND_BYPASS)
+		extsr = MII_M1111_HWCFG_SERIAL_AN_BYPASS;
+	else
+		extsr = 0;
+
+	if (modes == LINK_INBAND_DISABLE)
+		bmcr = 0;
+	else
+		bmcr = BMCR_ANENABLE;
+
+	err = phy_modify(phydev, MII_M1111_PHY_EXT_SR,
+			 MII_M1111_HWCFG_SERIAL_AN_BYPASS, extsr);
+	if (err < 0)
+		return extsr;
+
+	return phy_modify_paged(phydev, MII_MARVELL_FIBER_PAGE, MII_BMCR,
+				BMCR_ANENABLE, bmcr);
+}
+
 static int m88e1111_config_aneg(struct phy_device *phydev)
 {
 	int extsr = phy_read(phydev, MII_M1111_PHY_EXT_SR);
@@ -1461,7 +1503,7 @@ static int m88e1540_get_fld(struct phy_device *phydev, u8 *msecs)
 
 static int m88e1540_set_fld(struct phy_device *phydev, const u8 *msecs)
 {
-	struct ethtool_eee eee;
+	struct ethtool_keee eee;
 	int val, ret;
 
 	if (*msecs == ETHTOOL_PHY_FAST_LINK_DOWN_OFF)
@@ -1471,7 +1513,7 @@ static int m88e1540_set_fld(struct phy_device *phydev, const u8 *msecs)
 	/* According to the Marvell data sheet EEE must be disabled for
 	 * Fast Link Down detection to work properly
 	 */
-	ret = phy_ethtool_get_eee(phydev, &eee);
+	ret = genphy_c45_ethtool_get_eee(phydev, &eee);
 	if (!ret && eee.eee_enabled) {
 		phydev_warn(phydev, "Fast Link Down detection requires EEE to be disabled!\n");
 		return -EBUSY;
@@ -2739,7 +2781,7 @@ static const struct hwmon_channel_info marvell_hwmon_temp = {
 	.config = marvell_hwmon_temp_config,
 };
 
-static const struct hwmon_channel_info *marvell_hwmon_info[] = {
+static const struct hwmon_channel_info * const marvell_hwmon_info[] = {
 	&marvell_hwmon_chip,
 	&marvell_hwmon_temp,
 	NULL
@@ -3292,6 +3334,8 @@ static struct phy_driver marvell_drivers[] = {
 		.name = "Marvell 88E1112",
 		/* PHY_GBIT_FEATURES */
 		.probe = marvell_probe,
+		.inband_caps = m88e1111_inband_caps,
+		.config_inband = m88e1111_config_inband,
 		.config_init = m88e1112_config_init,
 		.config_aneg = marvell_config_aneg,
 		.config_intr = marvell_config_intr,
@@ -3310,8 +3354,10 @@ static struct phy_driver marvell_drivers[] = {
 		.phy_id = MARVELL_PHY_ID_88E1111,
 		.phy_id_mask = MARVELL_PHY_ID_MASK,
 		.name = "Marvell 88E1111",
-		/* PHY_GBIT_FEATURES */
+		.features = PHY_GBIT_FEATURES,
 		.probe = marvell_probe,
+		.inband_caps = m88e1111_inband_caps,
+		.config_inband = m88e1111_config_inband,
 		.config_init = m88e1111gbe_config_init,
 		.config_aneg = m88e1111_config_aneg,
 		.read_status = marvell_read_status,
@@ -3333,6 +3379,8 @@ static struct phy_driver marvell_drivers[] = {
 		.name = "Marvell 88E1111 (Finisar)",
 		/* PHY_GBIT_FEATURES */
 		.probe = marvell_probe,
+		.inband_caps = m88e1111_inband_caps,
+		.config_inband = m88e1111_config_inband,
 		.config_init = m88e1111gbe_config_init,
 		.config_aneg = m88e1111_config_aneg,
 		.read_status = marvell_read_status,

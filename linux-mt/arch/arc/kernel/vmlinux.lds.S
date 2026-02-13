@@ -35,7 +35,7 @@ SECTIONS
 	*
 	* Note: "OWRTDTB:" won't be overwritten with .dtb, .dtb will follow it.
 	*/
- 	.owrt : {
+	.owrt : {
 		*(.owrt)
 	. = ALIGN(PAGE_SIZE);
 	}
@@ -98,7 +98,6 @@ SECTIONS
 		_stext = .;
 		TEXT_TEXT
 		SCHED_TEXT
-		CPUIDLE_TEXT
 		LOCK_TEXT
 		KPROBES_TEXT
 		IRQENTRY_TEXT

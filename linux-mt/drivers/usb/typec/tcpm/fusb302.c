@@ -15,7 +15,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/proc_fs.h>
 #include <linux/regulator/consumer.h>
@@ -103,6 +103,7 @@ struct fusb302_chip {
 	bool vconn_on;
 	bool vbus_on;
 	bool charge_on;
+	bool pd_rx_on;
 	bool vbus_present;
 	enum typec_cc_polarity cc_polarity;
 	enum typec_cc_status cc1;
@@ -190,7 +191,7 @@ static void fusb302_log(struct fusb302_chip *chip, const char *fmt, ...)
 
 static int fusb302_debug_show(struct seq_file *s, void *v)
 {
-	struct fusb302_chip *chip = (struct fusb302_chip *)s->private;
+	struct fusb302_chip *chip = s->private;
 	int tail;
 
 	mutex_lock(&chip->logbuffer_lock);
@@ -841,6 +842,11 @@ static int tcpm_set_pd_rx(struct tcpc_dev *dev, bool on)
 	int ret = 0;
 
 	mutex_lock(&chip->lock);
+	if (chip->pd_rx_on == on) {
+		fusb302_log(chip, "pd is already %s", str_on_off(on));
+		goto done;
+	}
+
 	ret = fusb302_pd_rx_flush(chip);
 	if (ret < 0) {
 		fusb302_log(chip, "cannot flush pd rx buffer, ret=%d", ret);
@@ -863,6 +869,8 @@ static int tcpm_set_pd_rx(struct tcpc_dev *dev, bool on)
 			    on ? "on" : "off", ret);
 		goto done;
 	}
+
+	chip->pd_rx_on = on;
 	fusb302_log(chip, "pd := %s", on ? "on" : "off");
 done:
 	mutex_unlock(&chip->lock);
@@ -1677,8 +1685,7 @@ static struct fwnode_handle *fusb302_fwnode_get(struct device *dev)
 	return fwnode;
 }
 
-static int fusb302_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int fusb302_probe(struct i2c_client *client)
 {
 	struct fusb302_chip *chip;
 	struct i2c_adapter *adapter = client->adapter;
@@ -1814,7 +1821,7 @@ static int fusb302_pm_resume(struct device *dev)
 	return 0;
 }
 
-static const struct of_device_id fusb302_dt_match[] = {
+static const struct of_device_id fusb302_dt_match[] __maybe_unused = {
 	{.compatible = "fcs,fusb302"},
 	{},
 };

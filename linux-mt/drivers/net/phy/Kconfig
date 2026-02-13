@@ -45,17 +45,14 @@ config LED_TRIGGER_PHY
 		for any speed known to the PHY.
 
 config PHYLIB_LEDS
-	bool "Support probing LEDs from device tree"
+	def_bool OF
 	depends on LEDS_CLASS=y || LEDS_CLASS=PHYLIB
-	depends on OF
-	default y
 	help
 	  When LED class support is enabled, phylib can automatically
 	  probe LED setting from device tree.
 
 config FIXED_PHY
 	tristate "MDIO Bus/PHY emulation with fixed speed/link PHYs"
-	depends on PHYLIB
 	select SWPHY
 	help
 	  Adds the platform "fixed" MDIO Bus to cover the boards that use
@@ -143,7 +140,37 @@ config RTL8367B_PHY
 
 endif # RTL8366_SMI
 
+source "drivers/net/phy/mtk/mt753x/Kconfig"
+
+source "drivers/net/phy/airoha/an8855/Kconfig"
+
 comment "MII PHY device drivers"
+
+config AIROHA_AN8801_PHY
+	tristate "Drivers for Airoha AN8801 Gigabit PHYs"
+	help
+	  Currently supports the Airoha AN8801 PHY.
+
+config AIROHA_EN8801SC_PHY
+	tristate "Airoha EN8801SC Gigabit PHY"
+	help
+	  Currently supports the Airoha EN8801SC PHY.
+
+config AIR_AN8855_PHY
+	tristate "Airoha AN8855 Internal Gigabit PHY"
+	help
+	  Currently supports the internal Airoha AN8855 Switch PHY.
+
+config AIR_EN8811H_PHY
+	tristate "Airoha EN8811H 2.5 Gigabit PHY"
+	help
+	  Currently supports the Airoha EN8811H PHY.
+
+config AIR_EN8811H_PHY_DEBUGFS
+	bool "EN8811H debugfs support"
+	depends on AIR_EN8811H_PHY
+	help
+	  Enable creation of debugfs files for the EN8811H drivers.
 
 config AMD_PHY
 	tristate "AMD and Altima PHYs"
@@ -153,6 +180,7 @@ config AMD_PHY
 config MESON_GXL_PHY
 	tristate "Amlogic Meson GXL Internal PHY"
 	depends on ARCH_MESON || COMPILE_TEST
+	select SMSC_PHY
 	help
 	  Currently has a driver for the Amlogic Meson GXL Internal PHY
 
@@ -184,14 +212,13 @@ config BROADCOM_PHY
 	tristate "Broadcom 54XX PHYs"
 	select BCM_NET_PHYLIB
 	select BCM_NET_PHYPTP if NETWORK_PHY_TIMESTAMPING
-	depends on PTP_1588_CLOCK_OPTIONAL
+	depends on NETWORK_PHY_TIMESTAMPING=n || PTP_1588_CLOCK_OPTIONAL
 	help
 	  Currently supports the BCM5411, BCM5421, BCM5461, BCM54616S, BCM5464,
 	  BCM5481, BCM54810 and BCM5482 PHYs.
 
 config BCM54140_PHY
 	tristate "Broadcom BCM54140 PHY"
-	depends on PHYLIB
 	depends on HWMON || HWMON=n
 	select BCM_NET_PHYLIB
 	help
@@ -216,7 +243,6 @@ config BCM7XXX_PHY
 
 config BCM84881_PHY
 	tristate "Broadcom BCM84881 PHY"
-	depends on PHYLIB
 	help
 	  Support the Broadcom BCM84881 PHY.
 
@@ -292,6 +318,12 @@ config MARVELL_10G_PHY
 	help
 	  Support for the Marvell Alaska MV88X3310 and compatible PHYs.
 
+config MARVELL_88Q2XXX_PHY
+	tristate "Marvell 88Q2XXX PHY"
+	help
+	  Support for the Marvell 88Q2XXX 100/1000BASE-T1 Automotive Ethernet
+	  PHYs.
+
 config MARVELL_88X2222_PHY
 	tristate "Marvell 88X2222 PHY"
 	help
@@ -306,35 +338,19 @@ config MAXLINEAR_GPHY
 	  Support for the Maxlinear GPY115, GPY211, GPY212, GPY215,
 	  GPY241, GPY245 PHYs.
 
-config MEDIATEK_GE_PHY
-	tristate "MediaTek Gigabit Ethernet PHYs"
-	help
-	  Supports the MediaTek Gigabit Ethernet PHYs.
-
-config MEDIATEK_GE_SOC_PHY
-	tristate "MediaTek SoC Ethernet PHYs"
-	depends on (ARM64 && ARCH_MEDIATEK) || COMPILE_TEST
-	select NVMEM_MTK_EFUSE
-	help
-	  Supports MediaTek SoC built-in Gigabit Ethernet PHYs.
-
-	  Include support for built-in Ethernet PHYs which are present in
-	  the MT7981 and MT7988 SoCs. These PHYs need calibration data
-	  present in the SoCs efuse and will dynamically calibrate VCM
-	  (common-mode voltage) during startup.
-
-config MEDIATEK_2P5G_PHY
-	tristate "MediaTek 2.5G Ethernet PHY"
-	depends on (ARCH_MEDIATEK && ARM64) || COMPILE_TEST
-	default NET_MEDIATEK_SOC
-	help
-	  Supports the MediaTek 2.5G Ethernet PHY.
+source "drivers/net/phy/mediatek/Kconfig"
 
 config MICREL_PHY
 	tristate "Micrel PHYs"
 	depends on PTP_1588_CLOCK_OPTIONAL
 	help
 	  Supports the KSZ9021, VSC8201, KS8001 PHYs.
+
+config MICROCHIP_T1S_PHY
+	tristate "Microchip 10BASE-T1S Ethernet PHYs"
+	help
+	  Currently supports the LAN8670/1/2 Rev.B1 and LAN8650/1 Rev.B0 Internal
+	  PHYs.
 
 config MICROCHIP_PHY
 	tristate "Microchip PHYs"
@@ -365,12 +381,18 @@ config NATIONAL_PHY
 	help
 	  Currently supports the DP83865 PHY.
 
+config NXP_CBTX_PHY
+	tristate "NXP 100BASE-TX PHYs"
+	help
+	  Support the 100BASE-TX PHY integrated on the SJA1110 automotive
+	  switch family.
+
 config NXP_C45_TJA11XX_PHY
 	tristate "NXP C45 TJA11XX PHYs"
 	depends on PTP_1588_CLOCK_OPTIONAL
 	help
 	  Enable support for NXP C45 TJA11XX PHYs.
-	  Currently supports only the TJA1103 PHY.
+	  Currently supports the TJA1103 and TJA1120 PHYs.
 
 config NXP_TJA11XX_PHY
 	tristate "NXP TJA11xx PHYs support"
@@ -378,22 +400,23 @@ config NXP_TJA11XX_PHY
 	help
 	  Currently supports the NXP TJA1100 and TJA1101 PHY.
 
-config AT803X_PHY
-	tristate "Qualcomm Atheros AR803X PHYs and QCA833x PHYs"
-	depends on REGULATOR
+config NCN26000_PHY
+	tristate "Onsemi 10BASE-T1S Ethernet PHY"
 	help
-	  Currently supports the AR8030, AR8031, AR8033, AR8035 and internal
-	  QCA8337(Internal qca8k PHY) model
+	  Adds support for the onsemi 10BASE-T1S Ethernet PHY.
+	  Currently supports the NCN26000 10BASE-T1S Industrial PHY
+	  with MII interface.
+
+source "drivers/net/phy/qcom/Kconfig"
 
 config QSEMI_PHY
 	tristate "Quality Semiconductor PHYs"
 	help
 	  Currently supports the qs6612
 
-config REALTEK_PHY
-	tristate "Realtek PHYs"
-	help
-	  Supports the Realtek 821x PHY.
+source "drivers/net/phy/realtek/Kconfig"
+
+source "drivers/net/phy/rtl8261n/Kconfig"
 
 config RENESAS_PHY
 	tristate "Renesas PHYs"
@@ -413,6 +436,7 @@ config RTL8367S_GSW
 
 config SMSC_PHY
 	tristate "SMSC PHYs"
+	select CRC16
 	help
 	  Currently supports the LAN83C185, LAN8187 and LAN8700 PHYs
 

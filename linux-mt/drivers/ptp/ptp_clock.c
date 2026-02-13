@@ -79,7 +79,7 @@ static int ptp_clock_settime(struct posix_clock *pc, const struct timespec64 *tp
 	struct ptp_clock *ptp = container_of(pc, struct ptp_clock, clock);
 
 	if (ptp_clock_freerun(ptp)) {
-		pr_err("ptp: physical clock is free running\n");
+		pr_err_ratelimited("ptp: physical clock is free running\n");
 		return -EBUSY;
 	}
 
@@ -104,7 +104,8 @@ static int ptp_clock_adjtime(struct posix_clock *pc, struct __kernel_timex *tx)
 	struct ptp_clock_info *ops;
 	int err = -EOPNOTSUPP;
 
-	if (ptp_clock_freerun(ptp)) {
+	if (tx->modes & (ADJ_SETOFFSET | ADJ_FREQUENCY | ADJ_OFFSET) &&
+	    ptp_clock_freerun(ptp)) {
 		pr_err("ptp: physical clock is free running\n");
 		return -EBUSY;
 	}
@@ -132,17 +133,19 @@ static int ptp_clock_adjtime(struct posix_clock *pc, struct __kernel_timex *tx)
 		long ppb = scaled_ppm_to_ppb(tx->freq);
 		if (ppb > ops->max_adj || ppb < -ops->max_adj)
 			return -ERANGE;
-		if (ops->adjfine)
-			err = ops->adjfine(ops, tx->freq);
-		else
-			err = ops->adjfreq(ops, ppb);
-		ptp->dialed_frequency = tx->freq;
+		err = ops->adjfine(ops, tx->freq);
+		if (!err)
+			ptp->dialed_frequency = tx->freq;
 	} else if (tx->modes & ADJ_OFFSET) {
 		if (ops->adjphase) {
+			s32 max_phase_adj = ops->getmaxphase(ops);
 			s32 offset = tx->offset;
 
 			if (!(tx->modes & ADJ_NANO))
 				offset *= NSEC_PER_USEC;
+
+			if (offset > max_phase_adj || offset < -max_phase_adj)
+				return -ERANGE;
 
 			err = ops->adjphase(ops, offset);
 		}
@@ -185,6 +188,11 @@ static int ptp_getcycles64(struct ptp_clock_info *info, struct timespec64 *ts)
 		return info->getcyclesx64(info, ts, NULL);
 	else
 		return info->gettime64(info, ts);
+}
+
+static int ptp_enable(struct ptp_clock_info *ptp, struct ptp_clock_request *request, int on)
+{
+	return -EOPNOTSUPP;
 }
 
 static void ptp_aux_kworker(struct kthread_work *work)
@@ -248,6 +256,9 @@ struct ptp_clock *ptp_clock_register(struct ptp_clock_info *info,
 		if (ptp->info->getcrosststamp)
 			ptp->info->getcrosscycles = ptp->info->getcrosststamp;
 	}
+
+	if (!ptp->info->enable)
+		ptp->info->enable = ptp_enable;
 
 	if (ptp->info->do_aux_work) {
 		kthread_init_delayed_work(&ptp->aux_work, ptp_aux_kworker);
@@ -464,7 +475,7 @@ static int __init ptp_init(void)
 {
 	int err;
 
-	ptp_class = class_create(THIS_MODULE, "ptp");
+	ptp_class = class_create("ptp");
 	if (IS_ERR(ptp_class)) {
 		pr_err("ptp: failed to allocate class\n");
 		return PTR_ERR(ptp_class);

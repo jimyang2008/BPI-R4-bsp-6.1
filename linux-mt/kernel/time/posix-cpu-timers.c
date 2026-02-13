@@ -243,13 +243,12 @@ static void proc_sample_cputime_atomic(struct task_cputime_atomic *at,
  */
 static inline void __update_gt_cputime(atomic64_t *cputime, u64 sum_cputime)
 {
-	u64 curr_cputime;
-retry:
-	curr_cputime = atomic64_read(cputime);
-	if (sum_cputime > curr_cputime) {
-		if (atomic64_cmpxchg(cputime, curr_cputime, sum_cputime) != curr_cputime)
-			goto retry;
-	}
+	u64 curr_cputime = atomic64_read(cputime);
+
+	do {
+		if (sum_cputime <= curr_cputime)
+			return;
+	} while (!atomic64_try_cmpxchg(cputime, &curr_cputime, sum_cputime));
 }
 
 static void update_gt_cputime(struct task_cputime_atomic *cputime_atomic,
@@ -1437,6 +1436,15 @@ void run_posix_cpu_timers(void)
 	struct task_struct *tsk = current;
 
 	lockdep_assert_irqs_disabled();
+
+	/*
+	 * Ensure that release_task(tsk) can't happen while
+	 * handle_posix_cpu_timers() is running. Otherwise, a concurrent
+	 * posix_cpu_timer_del() may fail to lock_task_sighand(tsk) and
+	 * miss timer->it.cpu.firing != 0.
+	 */
+	if (tsk->exit_state)
+		return;
 
 	/*
 	 * If the actual expiry is deferred to task work context and the

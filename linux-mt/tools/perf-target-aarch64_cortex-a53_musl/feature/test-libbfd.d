@@ -1,0 +1,21 @@
+/ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/perf-target-aarch64_cortex-a53_musl/feature/test-libbfd.bin: \
+ test-libbfd.c \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdc-predef.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/bfd.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/ansidecl.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/symcat.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdint.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/alltypes.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/stdint.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdbool.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/diagnostics.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdarg.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/fortify/string.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/string.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/features.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/fortify/strings.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/strings.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/fortify/fortify-headers.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/sys/stat.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/stat.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/inttypes.h

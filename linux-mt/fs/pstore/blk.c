@@ -89,7 +89,7 @@ static struct pstore_device_info *pstore_device_info;
 		_##name_ = check_size(name, alignsize);		\
 	else							\
 		_##name_ = 0;					\
-	/* Synchronize module parameters with resuls. */	\
+	/* Synchronize module parameters with results. */	\
 	name = _##name_ / 1024;					\
 	dev->zone.name = _##name_;				\
 }
@@ -121,7 +121,7 @@ static int __register_pstore_device(struct pstore_device_info *dev)
 	if (pstore_device_info)
 		return -EBUSY;
 
-	/* zero means not limit on which backends to attempt to store. */
+	/* zero means no limit on which backends attempt to store. */
 	if (!dev->flags)
 		dev->flags = UINT_MAX;
 
@@ -263,9 +263,9 @@ static __init const char *early_boot_devpath(const char *initial_devname)
 	 * same scheme to find the device that we use for mounting
 	 * the root file system.
 	 */
-	dev_t dev = name_to_dev_t(initial_devname);
+	dev_t dev;
 
-	if (!dev) {
+	if (early_lookup_bdev(initial_devname, &dev)) {
 		pr_err("failed to resolve '%s'!\n", initial_devname);
 		return initial_devname;
 	}

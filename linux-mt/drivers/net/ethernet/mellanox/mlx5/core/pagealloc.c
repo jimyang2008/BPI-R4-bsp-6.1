@@ -79,7 +79,13 @@ static u16 func_id_to_type(struct mlx5_core_dev *dev, u16 func_id, bool ec_funct
 	if (!func_id)
 		return mlx5_core_is_ecpf(dev) && !ec_function ? MLX5_HOST_PF : MLX5_PF;
 
-	return func_id <= mlx5_core_max_vfs(dev) ?  MLX5_VF : MLX5_SF;
+	if (func_id <= max(mlx5_core_max_vfs(dev), mlx5_core_max_ec_vfs(dev))) {
+		if (ec_function)
+			return MLX5_EC_VF;
+		else
+			return MLX5_VF;
+	}
+	return MLX5_SF;
 }
 
 static u32 mlx5_get_ec_function(u32 function)
@@ -285,7 +291,7 @@ static void free_4k(struct mlx5_core_dev *dev, u64 addr, u32 function)
 static int alloc_system_page(struct mlx5_core_dev *dev, u32 function)
 {
 	struct device *device = mlx5_core_dma_dev(dev);
-	int nid = dev_to_node(device);
+	int nid = dev->priv.numa_node;
 	struct page *page;
 	u64 zero_addr = 1;
 	u64 addr;
@@ -730,6 +736,9 @@ int mlx5_reclaim_startup_pages(struct mlx5_core_dev *dev)
 	WARN(dev->priv.page_counters[MLX5_HOST_PF],
 	     "External host PF FW pages counter is %d after reclaiming all pages\n",
 	     dev->priv.page_counters[MLX5_HOST_PF]);
+	WARN(dev->priv.page_counters[MLX5_EC_VF],
+	     "EC VFs FW pages counter is %d after reclaiming all pages\n",
+	     dev->priv.page_counters[MLX5_EC_VF]);
 
 	return 0;
 }

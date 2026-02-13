@@ -103,13 +103,6 @@ config ATARI_PARTITION
 	  Say Y here if you would like to use hard disks under Linux which
 	  were partitioned under the Atari OS.
 
-config FIT_PARTITION
-	bool "Flattened-Image-Tree (FIT) partition support" if PARTITION_ADVANCED
-	default n
-	help
-	  Say Y here if your system needs to mount the filesystem part of
-	  a Flattened-Image-Tree (FIT) image commonly used with Das U-Boot.
-
 config IBM_PARTITION
 	bool "IBM disk label and partition support"
 	depends on PARTITION_ADVANCED && S390
@@ -276,5 +269,14 @@ config CMDLINE_PARTITION
 	help
 	  Say Y here if you want to read the partition table from bootargs.
 	  The format for the command line is just like mtdparts.
+
+config OF_PARTITION
+	bool "Device Tree partition support" if PARTITION_ADVANCED
+	depends on OF
+	help
+	  Say Y here if you want to enable support for partition table
+	  defined in Device Tree. (mainly for eMMC)
+	  The format for the device tree node is just like MTD fixed-partition
+	  schema.
 
 endmenu

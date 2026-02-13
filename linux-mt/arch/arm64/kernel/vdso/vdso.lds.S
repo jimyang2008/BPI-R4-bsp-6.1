@@ -38,6 +38,7 @@ SECTIONS
 	 */
 	/DISCARD/	: {
 		*(.note.GNU-stack .note.gnu.property)
+		*(.ARM.attributes)
 	}
 	.note		: { *(.note.*) }		:text	:note
 
@@ -50,9 +51,7 @@ SECTIONS
 
 	. = ALIGN(4);
 	.altinstructions : {
-		__alt_instructions = .;
 		*(.altinstructions)
-		__alt_instructions_end = .;
 	}
 
 	.dynamic	: { *(.dynamic) }		:text	:dynamic

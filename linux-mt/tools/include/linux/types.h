@@ -53,11 +53,15 @@ typedef __s8  s8;
 #endif
 
 #define __force
+/* This is defined in linux/compiler_types.h and is left for backward
+ * compatibility.
+ */
+#ifndef __user
 #define __user
-#define __must_check
-#ifndef __cold
-#define __cold
 #endif
+#define __must_check
+#undef __cold
+#define __cold
 
 typedef __u16 __bitwise __le16;
 typedef __u16 __bitwise __be16;

@@ -203,6 +203,11 @@ static struct severity {
 		BITSET(MCI_STATUS_OVER|MCI_STATUS_UC)
 		),
 	MCESEV(
+		PANIC, "Uncorrected in kernel",
+		BITSET(MCI_STATUS_UC),
+		KERNEL
+		),
+	MCESEV(
 		UC, "Uncorrected",
 		BITSET(MCI_STATUS_UC)
 		),
@@ -283,14 +288,12 @@ static noinstr int error_context(struct mce *m, struct pt_regs *regs)
 	copy_user  = is_copy_from_user(regs);
 	instrumentation_end();
 
-	switch (fixup_type) {
-	case EX_TYPE_UACCESS:
-	case EX_TYPE_COPY:
-		if (!copy_user)
-			return IN_KERNEL;
-		m->kflags |= MCE_IN_KERNEL_COPYIN;
-		fallthrough;
+	if (copy_user) {
+		m->kflags |= MCE_IN_KERNEL_COPYIN | MCE_IN_KERNEL_RECOV;
+		return IN_KERNEL_RECOV;
+	}
 
+	switch (fixup_type) {
 	case EX_TYPE_FAULT_MCE_SAFE:
 	case EX_TYPE_DEFAULT_MCE_SAFE:
 		m->kflags |= MCE_IN_KERNEL_RECOV;
@@ -390,9 +393,6 @@ static noinstr int mce_severity_intel(struct mce *m, struct pt_regs *regs, char 
 		if (msg)
 			*msg = s->msg;
 		s->covered = 1;
-
-		if (s->sev >= MCE_UC_SEVERITY && ctx == IN_KERNEL)
-			return MCE_PANIC_SEVERITY;
 
 		return s->sev;
 	}

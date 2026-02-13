@@ -107,6 +107,7 @@
 #include <linux/interrupt.h>
 #include <linux/poll.h>
 #include <linux/tcp.h>
+#include <linux/udp.h>
 #include <linux/init.h>
 #include <linux/highmem.h>
 #include <linux/user_namespace.h>
@@ -114,6 +115,9 @@
 #include <linux/memcontrol.h>
 #include <linux/prefetch.h>
 #include <linux/compat.h>
+#include <linux/mroute.h>
+#include <linux/mroute6.h>
+#include <linux/icmpv6.h>
 #include <linux/cookie.h>
 
 #include <linux/uaccess.h>
@@ -139,6 +143,7 @@
 
 #include <net/tcp.h>
 #include <net/busy_poll.h>
+#include <net/phonet/phonet.h>
 
 #include <linux/ethtool.h>
 
@@ -280,6 +285,7 @@ __u32 sysctl_rmem_max __read_mostly = SK_RMEM_MAX;
 EXPORT_SYMBOL(sysctl_rmem_max);
 __u32 sysctl_wmem_default __read_mostly = SK_WMEM_MAX;
 __u32 sysctl_rmem_default __read_mostly = SK_RMEM_MAX;
+int sysctl_mem_pcpu_rsv __read_mostly = SK_MEMORY_PCPU_RESERVE;
 
 /* Maximal space eaten by iovec or ancillary data plus some space */
 int sysctl_optmem_max __read_mostly = sizeof(unsigned long)*(2*UIO_MAXIOV+512);
@@ -482,7 +488,7 @@ int __sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 	unsigned long flags;
 	struct sk_buff_head *list = &sk->sk_receive_queue;
 
-	if (atomic_read(&sk->sk_rmem_alloc) >= sk->sk_rcvbuf) {
+	if (atomic_read(&sk->sk_rmem_alloc) >= READ_ONCE(sk->sk_rcvbuf)) {
 		atomic_inc(&sk->sk_drops);
 		trace_sock_rcvqueue_full(sk, skb);
 		return -ENOMEM;
@@ -552,7 +558,7 @@ int __sk_receive_skb(struct sock *sk, struct sk_buff *skb,
 
 	skb->dev = NULL;
 
-	if (sk_rcvqueues_full(sk, sk->sk_rcvbuf)) {
+	if (sk_rcvqueues_full(sk, READ_ONCE(sk->sk_rcvbuf))) {
 		atomic_inc(&sk->sk_drops);
 		goto discard_and_relse;
 	}
@@ -588,14 +594,17 @@ EXPORT_SYMBOL(__sk_receive_skb);
 
 u64 __sock_gen_cookie(struct sock *sk)
 {
-	while (1) {
-		u64 res = atomic64_read(&sk->sk_cookie);
+	u64 res = atomic64_read(&sk->sk_cookie);
 
-		if (res)
-			return res;
-		res = gen_cookie_next(&sock_cookie);
-		atomic64_cmpxchg(&sk->sk_cookie, 0, res);
+	if (!res) {
+		u64 new = gen_cookie_next(&sock_cookie);
+
+		atomic64_cmpxchg(&sk->sk_cookie, res, new);
+
+		/* Another thread might have changed sk_cookie before us. */
+		res = atomic64_read(&sk->sk_cookie);
 	}
+	return res;
 }
 
 INDIRECT_CALLABLE_DECLARE(struct dst_entry *ip6_dst_check(struct dst_entry *,
@@ -778,7 +787,7 @@ bool sk_mc_loop(struct sock *sk)
 	/* IPV6_ADDRFORM can change sk->sk_family under us. */
 	switch (READ_ONCE(sk->sk_family)) {
 	case AF_INET:
-		return inet_sk(sk)->mc_loop;
+		return inet_test_bit(MC_LOOP, sk);
 #if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
 		return inet6_sk(sk)->mc_loop;
@@ -918,13 +927,20 @@ int sock_set_timestamping(struct sock *sk, int optname,
 	if (val & ~SOF_TIMESTAMPING_MASK)
 		return -EINVAL;
 
+	if (val & SOF_TIMESTAMPING_OPT_ID_TCP &&
+	    !(val & SOF_TIMESTAMPING_OPT_ID))
+		return -EINVAL;
+
 	if (val & SOF_TIMESTAMPING_OPT_ID &&
 	    !(sk->sk_tsflags & SOF_TIMESTAMPING_OPT_ID)) {
 		if (sk_is_tcp(sk)) {
 			if ((1 << sk->sk_state) &
 			    (TCPF_CLOSE | TCPF_LISTEN))
 				return -EINVAL;
-			atomic_set(&sk->sk_tskey, tcp_sk(sk)->snd_una);
+			if (val & SOF_TIMESTAMPING_OPT_ID_TCP)
+				atomic_set(&sk->sk_tskey, tcp_sk(sk)->write_seq);
+			else
+				atomic_set(&sk->sk_tskey, tcp_sk(sk)->snd_una);
 		} else {
 			atomic_set(&sk->sk_tskey, 0);
 		}
@@ -1134,7 +1150,10 @@ int sk_setsockopt(struct sock *sk, int level, int optname,
 		sk->sk_reuse = (valbool ? SK_CAN_REUSE : SK_NO_REUSE);
 		break;
 	case SO_REUSEPORT:
-		sk->sk_reuseport = valbool;
+		if (valbool && !sk_is_inet(sk))
+			ret = -EOPNOTSUPP;
+		else
+			sk->sk_reuseport = valbool;
 		break;
 	case SO_TYPE:
 	case SO_PROTOCOL:
@@ -1251,10 +1270,11 @@ set_sndbuf:
 		break;
 
 	case SO_PASSCRED:
-		if (valbool)
-			set_bit(SOCK_PASSCRED, &sock->flags);
-		else
-			clear_bit(SOCK_PASSCRED, &sock->flags);
+		assign_bit(SOCK_PASSCRED, &sock->flags, valbool);
+		break;
+
+	case SO_PASSPIDFD:
+		assign_bit(SOCK_PASSPIDFD, &sock->flags, valbool);
 		break;
 
 	case SO_TIMESTAMP_OLD:
@@ -1280,14 +1300,19 @@ set_sndbuf:
 		break;
 
 	case SO_RCVLOWAT:
+		{
+		int (*set_rcvlowat)(struct sock *sk, int val) = NULL;
+
 		if (val < 0)
 			val = INT_MAX;
-		if (sock && sock->ops->set_rcvlowat)
-			ret = sock->ops->set_rcvlowat(sk, val);
+		if (sock)
+			set_rcvlowat = READ_ONCE(sock->ops)->set_rcvlowat;
+		if (set_rcvlowat)
+			ret = set_rcvlowat(sk, val);
 		else
 			WRITE_ONCE(sk->sk_rcvlowat, val ? : 1);
 		break;
-
+		}
 	case SO_RCVTIMEO_OLD:
 	case SO_RCVTIMEO_NEW:
 		ret = sock_set_timeout(&sk->sk_rcvtimeo, optval,
@@ -1358,10 +1383,7 @@ set_sndbuf:
 		break;
 
 	case SO_PASSSEC:
-		if (valbool)
-			set_bit(SOCK_PASSSEC, &sock->flags);
-		else
-			clear_bit(SOCK_PASSSEC, &sock->flags);
+		assign_bit(SOCK_PASSSEC, &sock->flags, valbool);
 		break;
 	case SO_MARK:
 		if (!sockopt_ns_capable(sock_net(sk)->user_ns, CAP_NET_RAW) &&
@@ -1385,11 +1407,16 @@ set_sndbuf:
 		break;
 
 	case SO_PEEK_OFF:
-		if (sock->ops->set_peek_off)
-			ret = sock->ops->set_peek_off(sk, val);
+		{
+		int (*set_peek_off)(struct sock *sk, int val);
+
+		set_peek_off = READ_ONCE(sock->ops)->set_peek_off;
+		if (set_peek_off)
+			ret = set_peek_off(sk, val);
 		else
 			ret = -EOPNOTSUPP;
 		break;
+		}
 
 	case SO_NOFCS:
 		sock_valbool_flag(sk, SOCK_NOFCS, valbool);
@@ -1401,15 +1428,10 @@ set_sndbuf:
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
 	case SO_BUSY_POLL:
-		/* allow unprivileged users to decrease the value */
-		if ((val > sk->sk_ll_usec) && !sockopt_capable(CAP_NET_ADMIN))
-			ret = -EPERM;
-		else {
-			if (val < 0)
-				ret = -EINVAL;
-			else
-				WRITE_ONCE(sk->sk_ll_usec, val);
-		}
+		if (val < 0)
+			ret = -EINVAL;
+		else
+			WRITE_ONCE(sk->sk_ll_usec, val);
 		break;
 	case SO_PREFER_BUSY_POLL:
 		if (valbool && !sockopt_capable(CAP_NET_ADMIN))
@@ -1754,6 +1776,10 @@ int sk_getsockopt(struct sock *sk, int level, int optname,
 		v.val = !!test_bit(SOCK_PASSCRED, &sock->flags);
 		break;
 
+	case SO_PASSPIDFD:
+		v.val = !!test_bit(SOCK_PASSPIDFD, &sock->flags);
+		break;
+
 	case SO_PEERCRED:
 	{
 		struct ucred peercred;
@@ -1767,6 +1793,39 @@ int sk_getsockopt(struct sock *sk, int level, int optname,
 		if (copy_to_sockptr(optval, &peercred, len))
 			return -EFAULT;
 		goto lenout;
+	}
+
+	case SO_PEERPIDFD:
+	{
+		struct pid *peer_pid;
+		struct file *pidfd_file = NULL;
+		int pidfd;
+
+		if (len > sizeof(pidfd))
+			len = sizeof(pidfd);
+
+		spin_lock(&sk->sk_peer_lock);
+		peer_pid = get_pid(sk->sk_peer_pid);
+		spin_unlock(&sk->sk_peer_lock);
+
+		if (!peer_pid)
+			return -ENODATA;
+
+		pidfd = pidfd_prepare(peer_pid, 0, &pidfd_file);
+		put_pid(peer_pid);
+		if (pidfd < 0)
+			return pidfd;
+
+		if (copy_to_sockptr(optval, &pidfd, len) ||
+		    copy_to_sockptr(optlen, &len, sizeof(int))) {
+			put_unused_fd(pidfd);
+			fput(pidfd_file);
+
+			return -EFAULT;
+		}
+
+		fd_install(pidfd, pidfd_file);
+		return 0;
 	}
 
 	case SO_PEERGROUPS:
@@ -1797,7 +1856,7 @@ int sk_getsockopt(struct sock *sk, int level, int optname,
 	{
 		struct sockaddr_storage address;
 
-		lv = sock->ops->getname(sock, (struct sockaddr *)&address, 2);
+		lv = READ_ONCE(sock->ops)->getname(sock, (struct sockaddr *)&address, 2);
 		if (lv < 0)
 			return -ENOTCONN;
 		if (lv < len)
@@ -1819,7 +1878,8 @@ int sk_getsockopt(struct sock *sk, int level, int optname,
 		break;
 
 	case SO_PEERSEC:
-		return security_socket_getpeersec_stream(sock, optval.user, optlen.user, len);
+		return security_socket_getpeersec_stream(sock,
+							 optval, optlen, len);
 
 	case SO_MARK:
 		v.val = READ_ONCE(sk->sk_mark);
@@ -1838,7 +1898,7 @@ int sk_getsockopt(struct sock *sk, int level, int optname,
 		break;
 
 	case SO_PEEK_OFF:
-		if (!sock->ops->set_peek_off)
+		if (!READ_ONCE(sock->ops)->set_peek_off)
 			return -EOPNOTSUPP;
 
 		v.val = READ_ONCE(sk->sk_peek_off);
@@ -1979,14 +2039,6 @@ lenout:
 	return 0;
 }
 
-int sock_getsockopt(struct socket *sock, int level, int optname,
-		    char __user *optval, int __user *optlen)
-{
-	return sk_getsockopt(sock->sk, level, optname,
-			     USER_SOCKPTR(optval),
-			     USER_SOCKPTR(optlen));
-}
-
 /*
  * Initialize an sk_lock.
  *
@@ -2123,6 +2175,10 @@ struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 		if (likely(sk->sk_net_refcnt)) {
 			get_net_track(net, &sk->ns_tracker, priority);
 			sock_inuse_add(net, 1);
+		} else {
+			net_passive_inc(net);
+			__netns_tracker_alloc(net, &sk->ns_tracker,
+					      false, priority);
 		}
 
 		sock_net_set(sk, net);
@@ -2145,6 +2201,7 @@ EXPORT_SYMBOL(sk_alloc);
 static void __sk_destruct(struct rcu_head *head)
 {
 	struct sock *sk = container_of(head, struct sock, sk_rcu);
+	struct net *net = sock_net(sk);
 	struct sk_filter *filter;
 
 	if (sk->sk_destruct)
@@ -2176,10 +2233,27 @@ static void __sk_destruct(struct rcu_head *head)
 	put_cred(sk->sk_peer_cred);
 	put_pid(sk->sk_peer_pid);
 
-	if (likely(sk->sk_net_refcnt))
-		put_net_track(sock_net(sk), &sk->ns_tracker);
+	if (likely(sk->sk_net_refcnt)) {
+		put_net_track(net, &sk->ns_tracker);
+	} else {
+		__netns_tracker_free(net, &sk->ns_tracker, false);
+		net_passive_dec(net);
+	}
 	sk_prot_free(sk->sk_prot_creator, sk);
 }
+
+void sk_net_refcnt_upgrade(struct sock *sk)
+{
+	struct net *net = sock_net(sk);
+
+	WARN_ON_ONCE(sk->sk_net_refcnt);
+	__netns_tracker_free(net, &sk->ns_tracker, false);
+	net_passive_dec(net);
+	sk->sk_net_refcnt = 1;
+	get_net_track(net, &sk->ns_tracker, GFP_KERNEL);
+	sock_inuse_add(net, 1);
+}
+EXPORT_SYMBOL_GPL(sk_net_refcnt_upgrade);
 
 void sk_destruct(struct sock *sk)
 {
@@ -2268,6 +2342,15 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 	if (likely(newsk->sk_net_refcnt)) {
 		get_net_track(sock_net(newsk), &newsk->ns_tracker, priority);
 		sock_inuse_add(sock_net(newsk), 1);
+	} else {
+		/* Kernel sockets are not elevating the struct net refcount.
+		 * Instead, use a tracker to more easily detect if a layer
+		 * is not properly dismantling its kernel sockets at netns
+		 * destroy time.
+		 */
+		net_passive_inc(sock_net(newsk));
+		__netns_tracker_alloc(sock_net(newsk), &newsk->ns_tracker,
+				      false, priority);
 	}
 	sk_node_init(&newsk->sk_node);
 	sock_lock_init(newsk);
@@ -2347,17 +2430,6 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 	smp_wmb();
 	refcount_set(&newsk->sk_refcnt, 2);
 
-	/* Increment the counter in the same struct proto as the master
-	 * sock (sk_refcnt_debug_inc uses newsk->sk_prot->socks, that
-	 * is the same as sk->sk_prot->socks, as this field was copied
-	 * with memcpy).
-	 *
-	 * This _changes_ the previous behaviour, where
-	 * tcp_create_openreq_child always was incrementing the
-	 * equivalent to tcp_prot->socks (inet_sock_nr), so this have
-	 * to be taken into account in all callers. -acme
-	 */
-	sk_refcnt_debug_inc(newsk);
 	sk_set_socket(newsk, NULL);
 	sk_tx_queue_clear(newsk);
 	RCU_INIT_POINTER(newsk->sk_wq, NULL);
@@ -2382,17 +2454,22 @@ void sk_free_unlock_clone(struct sock *sk)
 }
 EXPORT_SYMBOL_GPL(sk_free_unlock_clone);
 
-static void sk_trim_gso_size(struct sock *sk)
+static u32 sk_dst_gso_max_size(struct sock *sk, struct dst_entry *dst)
 {
-	if (sk->sk_gso_max_size <= GSO_LEGACY_MAX_SIZE)
-		return;
+	bool is_ipv6 = false;
+	u32 max_size;
+
 #if IS_ENABLED(CONFIG_IPV6)
-	if (sk->sk_family == AF_INET6 &&
-	    sk_is_tcp(sk) &&
-	    !ipv6_addr_v4mapped(&sk->sk_v6_rcv_saddr))
-		return;
+	is_ipv6 = (sk->sk_family == AF_INET6 &&
+		   !ipv6_addr_v4mapped(&sk->sk_v6_rcv_saddr));
 #endif
-	sk->sk_gso_max_size = GSO_LEGACY_MAX_SIZE;
+	/* pairs with the WRITE_ONCE() in netif_set_gso(_ipv4)_max_size() */
+	max_size = is_ipv6 ? READ_ONCE(dst->dev->gso_max_size) :
+			READ_ONCE(dst->dev->gso_ipv4_max_size);
+	if (max_size > GSO_LEGACY_MAX_SIZE && !sk_is_tcp(sk))
+		max_size = GSO_LEGACY_MAX_SIZE;
+
+	return max_size - (MAX_TCP_HEADER + 1);
 }
 
 void sk_setup_caps(struct sock *sk, struct dst_entry *dst)
@@ -2403,7 +2480,7 @@ void sk_setup_caps(struct sock *sk, struct dst_entry *dst)
 	if (sk_is_tcp(sk))
 		sk->sk_route_caps |= NETIF_F_GSO;
 	if (sk->sk_route_caps & NETIF_F_GSO)
-		sk->sk_route_caps |= NETIF_F_GSO_SOFTWARE;
+		sk->sk_route_caps |= NETIF_F_GSO_SOFTWARE_ALL;
 	if (unlikely(sk->sk_gso_disabled))
 		sk->sk_route_caps &= ~NETIF_F_GSO_MASK;
 	if (sk_can_gso(sk)) {
@@ -2411,10 +2488,7 @@ void sk_setup_caps(struct sock *sk, struct dst_entry *dst)
 			sk->sk_route_caps &= ~NETIF_F_GSO_MASK;
 		} else {
 			sk->sk_route_caps |= NETIF_F_SG | NETIF_F_HW_CSUM;
-			/* pairs with the WRITE_ONCE() in netif_set_gso_max_size() */
-			sk->sk_gso_max_size = READ_ONCE(dst->dev->gso_max_size);
-			sk_trim_gso_size(sk);
-			sk->sk_gso_max_size -= (MAX_TCP_HEADER + 1);
+			sk->sk_gso_max_size = sk_dst_gso_max_size(sk, dst);
 			/* pairs with the WRITE_ONCE() in netif_set_gso_max_segs() */
 			max_segs = max_t(u32, READ_ONCE(dst->dev->gso_max_segs), 1);
 		}
@@ -2772,7 +2846,7 @@ failure:
 }
 EXPORT_SYMBOL(sock_alloc_send_pskb);
 
-int __sock_cmsg_send(struct sock *sk, struct msghdr *msg, struct cmsghdr *cmsg,
+int __sock_cmsg_send(struct sock *sk, struct cmsghdr *cmsg,
 		     struct sockcm_cookie *sockc)
 {
 	u32 tsflags;
@@ -2827,7 +2901,7 @@ int sock_cmsg_send(struct sock *sk, struct msghdr *msg,
 			return -EINVAL;
 		if (cmsg->cmsg_level != SOL_SOCKET)
 			continue;
-		ret = __sock_cmsg_send(sk, msg, cmsg, sockc);
+		ret = __sock_cmsg_send(sk, cmsg, sockc);
 		if (ret)
 			return ret;
 	}
@@ -3252,36 +3326,6 @@ void __receive_sock(struct file *file)
 	}
 }
 
-ssize_t sock_no_sendpage(struct socket *sock, struct page *page, int offset, size_t size, int flags)
-{
-	ssize_t res;
-	struct msghdr msg = {.msg_flags = flags};
-	struct kvec iov;
-	char *kaddr = kmap(page);
-	iov.iov_base = kaddr + offset;
-	iov.iov_len = size;
-	res = kernel_sendmsg(sock, &msg, &iov, 1, size);
-	kunmap(page);
-	return res;
-}
-EXPORT_SYMBOL(sock_no_sendpage);
-
-ssize_t sock_no_sendpage_locked(struct sock *sk, struct page *page,
-				int offset, size_t size, int flags)
-{
-	ssize_t res;
-	struct msghdr msg = {.msg_flags = flags};
-	struct kvec iov;
-	char *kaddr = kmap(page);
-
-	iov.iov_base = kaddr + offset;
-	iov.iov_len = size;
-	res = kernel_sendmsg_locked(sk, &msg, &iov, 1, size);
-	kunmap(page);
-	return res;
-}
-EXPORT_SYMBOL(sock_no_sendpage_locked);
-
 /*
  *	Default Socket Callbacks
  */
@@ -3312,6 +3356,8 @@ static void sock_def_error_report(struct sock *sk)
 void sock_def_readable(struct sock *sk)
 {
 	struct socket_wq *wq;
+
+	trace_sk_data_ready(sk);
 
 	rcu_read_lock();
 	wq = rcu_dereference(sk->sk_wq);
@@ -3412,6 +3458,7 @@ void sock_init_data_uid(struct socket *sock, struct sock *sk, kuid_t uid)
 	sk->sk_rcvbuf		=	READ_ONCE(sysctl_rmem_default);
 	sk->sk_sndbuf		=	READ_ONCE(sysctl_wmem_default);
 	sk->sk_state		=	TCP_CLOSE;
+	sk->sk_use_task_frag	=	true;
 	sk_set_socket(sk, sock);
 
 	sock_set_flag(sk, SOCK_ZAPPED);
@@ -3709,6 +3756,9 @@ void sk_common_release(struct sock *sk)
 
 	sk->sk_prot->unhash(sk);
 
+	if (sk->sk_socket)
+		sk->sk_socket->sk = NULL;
+
 	/*
 	 * In this point socket cannot receive new packets, but it is possible
 	 * that some packets are in flight because some CPU runs receiver and
@@ -3724,8 +3774,6 @@ void sk_common_release(struct sock *sk)
 	sock_orphan(sk);
 
 	xfrm_sk_free_policy(sk);
-
-	sk_refcnt_debug_release(sk);
 
 	sock_put(sk);
 }
@@ -3805,7 +3853,7 @@ static int assign_proto_idx(struct proto *prot)
 {
 	prot->inuse_idx = find_first_zero_bit(proto_inuse_idx, PROTO_INUSE_NR);
 
-	if (unlikely(prot->inuse_idx == PROTO_INUSE_NR - 1)) {
+	if (unlikely(prot->inuse_idx == PROTO_INUSE_NR)) {
 		pr_err("PROTO_INUSE_NR exhausted\n");
 		return -ENOSPC;
 	}
@@ -3816,7 +3864,7 @@ static int assign_proto_idx(struct proto *prot)
 
 static void release_proto_idx(struct proto *prot)
 {
-	if (prot->inuse_idx != PROTO_INUSE_NR - 1)
+	if (prot->inuse_idx != PROTO_INUSE_NR)
 		clear_bit(prot->inuse_idx, proto_inuse_idx);
 }
 #else
@@ -4036,7 +4084,7 @@ static void proto_seq_printf(struct seq_file *seq, struct proto *proto)
 {
 
 	seq_printf(seq, "%-9s %4u %6d  %6ld   %-3s %6u   %-3s  %-10s "
-			"%2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c\n",
+			"%2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c %2c\n",
 		   proto->name,
 		   proto->obj_size,
 		   sock_prot_inuse_get(seq_file_net(seq), proto),
@@ -4057,7 +4105,6 @@ static void proto_seq_printf(struct seq_file *seq, struct proto *proto)
 		   proto_method_implemented(proto->getsockopt),
 		   proto_method_implemented(proto->sendmsg),
 		   proto_method_implemented(proto->recvmsg),
-		   proto_method_implemented(proto->sendpage),
 		   proto_method_implemented(proto->bind),
 		   proto_method_implemented(proto->backlog_rcv),
 		   proto_method_implemented(proto->hash),
@@ -4078,7 +4125,7 @@ static int proto_seq_show(struct seq_file *seq, void *v)
 			   "maxhdr",
 			   "slab",
 			   "module",
-			   "cl co di ac io in de sh ss gs se re sp bi br ha uh gp em\n");
+			   "cl co di ac io in de sh ss gs se re bi br ha uh gp em\n");
 	else
 		proto_seq_printf(seq, list_entry(v, struct proto, node));
 	return 0;
@@ -4127,8 +4174,14 @@ bool sk_busy_loop_end(void *p, unsigned long start_time)
 {
 	struct sock *sk = p;
 
-	return !skb_queue_empty_lockless(&sk->sk_receive_queue) ||
-	       sk_busy_loop_timeout(sk, start_time);
+	if (!skb_queue_empty_lockless(&sk->sk_receive_queue))
+		return true;
+
+	if (sk_is_udp(sk) &&
+	    !skb_queue_empty_lockless(&udp_sk(sk)->reader_queue))
+		return true;
+
+	return sk_busy_loop_timeout(sk, start_time);
 }
 EXPORT_SYMBOL(sk_busy_loop_end);
 #endif /* CONFIG_NET_RX_BUSY_POLL */
@@ -4140,3 +4193,63 @@ int sock_bind_add(struct sock *sk, struct sockaddr *addr, int addr_len)
 	return sk->sk_prot->bind_add(sk, addr, addr_len);
 }
 EXPORT_SYMBOL(sock_bind_add);
+
+/* Copy 'size' bytes from userspace and return `size` back to userspace */
+int sock_ioctl_inout(struct sock *sk, unsigned int cmd,
+		     void __user *arg, void *karg, size_t size)
+{
+	int ret;
+
+	if (copy_from_user(karg, arg, size))
+		return -EFAULT;
+
+	ret = READ_ONCE(sk->sk_prot)->ioctl(sk, cmd, karg);
+	if (ret)
+		return ret;
+
+	if (copy_to_user(arg, karg, size))
+		return -EFAULT;
+
+	return 0;
+}
+EXPORT_SYMBOL(sock_ioctl_inout);
+
+/* This is the most common ioctl prep function, where the result (4 bytes) is
+ * copied back to userspace if the ioctl() returns successfully. No input is
+ * copied from userspace as input argument.
+ */
+static int sock_ioctl_out(struct sock *sk, unsigned int cmd, void __user *arg)
+{
+	int ret, karg = 0;
+
+	ret = READ_ONCE(sk->sk_prot)->ioctl(sk, cmd, &karg);
+	if (ret)
+		return ret;
+
+	return put_user(karg, (int __user *)arg);
+}
+
+/* A wrapper around sock ioctls, which copies the data from userspace
+ * (depending on the protocol/ioctl), and copies back the result to userspace.
+ * The main motivation for this function is to pass kernel memory to the
+ * protocol ioctl callbacks, instead of userspace memory.
+ */
+int sk_ioctl(struct sock *sk, unsigned int cmd, void __user *arg)
+{
+	int rc = 1;
+
+	if (sk->sk_type == SOCK_RAW && sk->sk_family == AF_INET)
+		rc = ipmr_sk_ioctl(sk, cmd, arg);
+	else if (sk->sk_type == SOCK_RAW && sk->sk_family == AF_INET6)
+		rc = ip6mr_sk_ioctl(sk, cmd, arg);
+	else if (sk_is_phonet(sk))
+		rc = phonet_sk_ioctl(sk, cmd, arg);
+
+	/* If ioctl was processed, returns its value */
+	if (rc <= 0)
+		return rc;
+
+	/* Otherwise call the default handler */
+	return sock_ioctl_out(sk, cmd, arg);
+}
+EXPORT_SYMBOL(sk_ioctl);

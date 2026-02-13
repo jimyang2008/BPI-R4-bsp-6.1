@@ -137,6 +137,7 @@
 
 /* SAI Transmit and Receive Configuration 4 Register */
 
+#define FSL_SAI_CR4_FCONT_MASK	BIT(28)
 #define FSL_SAI_CR4_FCONT	BIT(28)
 #define FSL_SAI_CR4_FCOMB_SHIFT BIT(26)
 #define FSL_SAI_CR4_FCOMB_SOFT  BIT(27)
@@ -238,6 +239,7 @@ struct fsl_sai_soc_data {
 	unsigned int reg_offset;
 	unsigned int flags;
 	unsigned int max_register;
+	unsigned int max_burst[2];
 };
 
 /**

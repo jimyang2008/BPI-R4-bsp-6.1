@@ -2101,6 +2101,9 @@ static int megasas_slave_configure(struct scsi_device *sdev)
 	/* This sdev property may change post OCR */
 	megasas_set_dynamic_target_properties(sdev, is_target_prop);
 
+	if (!MEGASAS_IS_LOGICAL(sdev))
+		sdev->no_vpd_size = 1;
+
 	mutex_unlock(&instance->reset_mutex);
 
 	return 0;
@@ -2927,15 +2930,14 @@ static int megasas_generic_reset(struct scsi_cmnd *scmd)
  * Sets the FW busy flag and reduces the host->can_queue if the
  * cmd has not been completed within the timeout period.
  */
-static enum
-blk_eh_timer_return megasas_reset_timer(struct scsi_cmnd *scmd)
+static enum scsi_timeout_action megasas_reset_timer(struct scsi_cmnd *scmd)
 {
 	struct megasas_instance *instance;
 	unsigned long flags;
 
 	if (time_after(jiffies, scmd->jiffies_at_alloc +
 				(scmd_timeout * 2) * HZ)) {
-		return BLK_EH_DONE;
+		return SCSI_EH_NOT_HANDLED;
 	}
 
 	instance = (struct megasas_instance *)scmd->device->host->hostdata;
@@ -2949,7 +2951,7 @@ blk_eh_timer_return megasas_reset_timer(struct scsi_cmnd *scmd)
 
 		spin_unlock_irqrestore(instance->host->host_lock, flags);
 	}
-	return BLK_EH_RESET_TIMER;
+	return SCSI_EH_RESET_TIMER;
 }
 
 /**
@@ -3503,7 +3505,7 @@ ATTRIBUTE_GROUPS(megaraid_host);
 /*
  * Scsi host template for megaraid_sas driver
  */
-static struct scsi_host_template megasas_template = {
+static const struct scsi_host_template megasas_template = {
 
 	.module = THIS_MODULE,
 	.name = "Avago SAS based MegaRAID driver",
@@ -3661,8 +3663,10 @@ megasas_complete_cmd(struct megasas_instance *instance, struct megasas_cmd *cmd,
 
 		case MFI_STAT_SCSI_IO_FAILED:
 		case MFI_STAT_LD_INIT_IN_PROGRESS:
-			cmd->scmd->result =
-			    (DID_ERROR << 16) | hdr->scsi_status;
+			if (hdr->scsi_status == 0xf0)
+				cmd->scmd->result = (DID_ERROR << 16) | SAM_STAT_CHECK_CONDITION;
+			else
+				cmd->scmd->result = (DID_ERROR << 16) | hdr->scsi_status;
 			break;
 
 		case MFI_STAT_SCSI_DONE_WITH_ERROR:
@@ -5151,8 +5155,8 @@ static void megasas_update_ext_vd_details(struct megasas_instance *instance)
 		fusion->max_map_sz = ventura_map_sz;
 	} else {
 		fusion->old_map_sz =
-			struct_size((struct MR_FW_RAID_MAP *)0, ldSpanMap,
-				    instance->fw_supported_vd_count);
+			struct_size_t(struct MR_FW_RAID_MAP, ldSpanMap,
+				      instance->fw_supported_vd_count);
 		fusion->new_map_sz =  sizeof(struct MR_FW_RAID_MAP_EXT);
 
 		fusion->max_map_sz =
@@ -5787,8 +5791,8 @@ megasas_setup_jbod_map(struct megasas_instance *instance)
 	struct fusion_context *fusion = instance->ctrl_context;
 	size_t pd_seq_map_sz;
 
-	pd_seq_map_sz = struct_size((struct MR_PD_CFG_SEQ_NUM_SYNC *)0, seq,
-				    MAX_PHYSICAL_DEVICES);
+	pd_seq_map_sz = struct_size_t(struct MR_PD_CFG_SEQ_NUM_SYNC, seq,
+				      MAX_PHYSICAL_DEVICES);
 
 	instance->use_seqnum_jbod_fp =
 		instance->support_seqnum_jbod_fp;
@@ -5904,7 +5908,11 @@ megasas_set_high_iops_queue_affinity_and_hint(struct megasas_instance *instance)
 	const struct cpumask *mask;
 
 	if (instance->perf_mode == MR_BALANCED_PERF_MODE) {
-		mask = cpumask_of_node(dev_to_node(&instance->pdev->dev));
+		int nid = dev_to_node(&instance->pdev->dev);
+
+		if (nid == NUMA_NO_NODE)
+			nid = 0;
+		mask = cpumask_of_node(nid);
 
 		for (i = 0; i < instance->low_latency_index_start; i++) {
 			irq = pci_irq_vector(instance->pdev, i);
@@ -7516,7 +7524,7 @@ static int megasas_probe_one(struct pci_dev *pdev,
 	 */
 	instance->pdev = pdev;
 	instance->host = host;
-	instance->unique_id = pdev->bus->number << 8 | pdev->devfn;
+	instance->unique_id = pci_dev_id(pdev);
 	instance->init_id = MEGASAS_DEFAULT_INIT_ID;
 
 	megasas_set_adapter_type(instance);
@@ -8031,8 +8039,8 @@ skip_firing_dcmds:
 	if (instance->adapter_type != MFI_SERIES) {
 		megasas_release_fusion(instance);
 		pd_seq_map_sz =
-			struct_size((struct MR_PD_CFG_SEQ_NUM_SYNC *)0,
-				    seq, MAX_PHYSICAL_DEVICES);
+			struct_size_t(struct MR_PD_CFG_SEQ_NUM_SYNC,
+				      seq, MAX_PHYSICAL_DEVICES);
 		for (i = 0; i < 2 ; i++) {
 			if (fusion->ld_map[i])
 				dma_free_coherent(&instance->pdev->dev,
@@ -8905,8 +8913,11 @@ megasas_aen_polling(struct work_struct *work)
 						   (ld_target_id / MEGASAS_MAX_DEV_PER_CHANNEL),
 						   (ld_target_id % MEGASAS_MAX_DEV_PER_CHANNEL),
 						   0);
-			if (sdev1)
+			if (sdev1) {
+				mutex_unlock(&instance->reset_mutex);
 				megasas_remove_scsi_device(sdev1);
+				mutex_lock(&instance->reset_mutex);
+			}
 
 			event_type = SCAN_VD_CHANNEL;
 			break;

@@ -10,6 +10,7 @@
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -243,7 +244,7 @@ static int dwc3_imx8mp_probe(struct platform_device *pdev)
 					IRQF_ONESHOT, dev_name(dev), dwc3_imx);
 	if (err) {
 		dev_err(dev, "failed to request IRQ #%d --> %d\n", irq, err);
-		goto depopulate;
+		goto put_dwc3;
 	}
 
 	device_set_wakeup_capable(dev, true);
@@ -251,6 +252,8 @@ static int dwc3_imx8mp_probe(struct platform_device *pdev)
 
 	return 0;
 
+put_dwc3:
+	put_device(&dwc3_imx->dwc3->dev);
 depopulate:
 	of_platform_depopulate(dev);
 err_node_put:
@@ -266,10 +269,12 @@ disable_hsio_clk:
 	return err;
 }
 
-static int dwc3_imx8mp_remove(struct platform_device *pdev)
+static void dwc3_imx8mp_remove(struct platform_device *pdev)
 {
 	struct dwc3_imx8mp *dwc3_imx = platform_get_drvdata(pdev);
 	struct device *dev = &pdev->dev;
+
+	put_device(&dwc3_imx->dwc3->dev);
 
 	pm_runtime_get_sync(dev);
 	of_platform_depopulate(dev);
@@ -279,9 +284,6 @@ static int dwc3_imx8mp_remove(struct platform_device *pdev)
 
 	pm_runtime_disable(dev);
 	pm_runtime_put_noidle(dev);
-	platform_set_drvdata(pdev, NULL);
-
-	return 0;
 }
 
 static int __maybe_unused dwc3_imx8mp_suspend(struct dwc3_imx8mp *dwc3_imx,
@@ -411,7 +413,7 @@ MODULE_DEVICE_TABLE(of, dwc3_imx8mp_of_match);
 
 static struct platform_driver dwc3_imx8mp_driver = {
 	.probe		= dwc3_imx8mp_probe,
-	.remove		= dwc3_imx8mp_remove,
+	.remove_new	= dwc3_imx8mp_remove,
 	.driver		= {
 		.name	= "imx8mp-dwc3",
 		.pm	= &dwc3_imx8mp_dev_pm_ops,

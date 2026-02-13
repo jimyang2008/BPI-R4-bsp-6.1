@@ -26,6 +26,12 @@
 #include <linux/ethtool.h>
 #include <linux/phy.h>
 #include <net/arp.h>
+#include <net/macsec.h>
+
+#if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+#include <linux/netfilter.h>
+#include <net/netfilter/nf_flow_table.h>
+#endif
 
 #include "vlan.h"
 #include "vlanproc.h"
@@ -272,17 +278,6 @@ static int vlan_dev_open(struct net_device *dev)
 			goto out;
 	}
 
-	if (dev->flags & IFF_ALLMULTI) {
-		err = dev_set_allmulti(real_dev, 1);
-		if (err < 0)
-			goto del_unicast;
-	}
-	if (dev->flags & IFF_PROMISC) {
-		err = dev_set_promiscuity(real_dev, 1);
-		if (err < 0)
-			goto clear_allmulti;
-	}
-
 	ether_addr_copy(vlan->real_dev_addr, real_dev->dev_addr);
 
 	if (vlan->flags & VLAN_FLAG_GVRP)
@@ -296,12 +291,6 @@ static int vlan_dev_open(struct net_device *dev)
 		netif_carrier_on(dev);
 	return 0;
 
-clear_allmulti:
-	if (dev->flags & IFF_ALLMULTI)
-		dev_set_allmulti(real_dev, -1);
-del_unicast:
-	if (!ether_addr_equal(dev->dev_addr, real_dev->dev_addr))
-		dev_uc_del(real_dev, dev->dev_addr);
 out:
 	netif_carrier_off(dev);
 	return err;
@@ -314,10 +303,6 @@ static int vlan_dev_stop(struct net_device *dev)
 
 	dev_mc_unsync(real_dev, dev);
 	dev_uc_unsync(real_dev, dev);
-	if (dev->flags & IFF_ALLMULTI)
-		dev_set_allmulti(real_dev, -1);
-	if (dev->flags & IFF_PROMISC)
-		dev_set_promiscuity(real_dev, -1);
 
 	if (!ether_addr_equal(dev->dev_addr, real_dev->dev_addr))
 		dev_uc_del(real_dev, dev->dev_addr);
@@ -353,6 +338,26 @@ out:
 	return 0;
 }
 
+static int vlan_hwtstamp_get(struct net_device *dev,
+			     struct kernel_hwtstamp_config *cfg)
+{
+	struct net_device *real_dev = vlan_dev_priv(dev)->real_dev;
+
+	return generic_hwtstamp_get_lower(real_dev, cfg);
+}
+
+static int vlan_hwtstamp_set(struct net_device *dev,
+			     struct kernel_hwtstamp_config *cfg,
+			     struct netlink_ext_ack *extack)
+{
+	struct net_device *real_dev = vlan_dev_priv(dev)->real_dev;
+
+	if (!net_eq(dev_net(dev), dev_net(real_dev)))
+		return -EOPNOTSUPP;
+
+	return generic_hwtstamp_set_lower(real_dev, cfg, extack);
+}
+
 static int vlan_dev_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
 	struct net_device *real_dev = vlan_dev_priv(dev)->real_dev;
@@ -364,14 +369,9 @@ static int vlan_dev_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	ifrr.ifr_ifru = ifr->ifr_ifru;
 
 	switch (cmd) {
-	case SIOCSHWTSTAMP:
-		if (!net_eq(dev_net(dev), dev_net(real_dev)))
-			break;
-		fallthrough;
 	case SIOCGMIIPHY:
 	case SIOCGMIIREG:
 	case SIOCSMIIREG:
-	case SIOCGHWTSTAMP:
 		if (netif_device_present(real_dev) && ops->ndo_eth_ioctl)
 			err = ops->ndo_eth_ioctl(real_dev, &ifrr, cmd);
 		break;
@@ -474,12 +474,10 @@ static void vlan_dev_change_rx_flags(struct net_device *dev, int change)
 {
 	struct net_device *real_dev = vlan_dev_priv(dev)->real_dev;
 
-	if (dev->flags & IFF_UP) {
-		if (change & IFF_ALLMULTI)
-			dev_set_allmulti(real_dev, dev->flags & IFF_ALLMULTI ? 1 : -1);
-		if (change & IFF_PROMISC)
-			dev_set_promiscuity(real_dev, dev->flags & IFF_PROMISC ? 1 : -1);
-	}
+	if (change & IFF_ALLMULTI)
+		dev_set_allmulti(real_dev, dev->flags & IFF_ALLMULTI ? 1 : -1);
+	if (change & IFF_PROMISC)
+		dev_set_promiscuity(real_dev, dev->flags & IFF_PROMISC ? 1 : -1);
 }
 
 static void vlan_dev_set_rx_mode(struct net_device *vlan_dev)
@@ -567,10 +565,13 @@ static int vlan_dev_init(struct net_device *dev)
 		dev->state |= (1 << __LINK_STATE_NOCARRIER);
 
 	dev->hw_features = NETIF_F_HW_CSUM | NETIF_F_SG |
-			   NETIF_F_FRAGLIST | NETIF_F_GSO_SOFTWARE |
+			   NETIF_F_FRAGLIST | NETIF_F_GSO_SOFTWARE_ALL |
 			   NETIF_F_GSO_ENCAP_ALL |
 			   NETIF_F_HIGHDMA | NETIF_F_SCTP_CRC |
 			   NETIF_F_ALL_FCOE;
+
+	if (real_dev->vlan_features & NETIF_F_HW_MACSEC)
+		dev->hw_features |= NETIF_F_HW_MACSEC;
 
 	dev->features |= dev->hw_features | NETIF_F_LLTX;
 	netif_inherit_tso_max(dev, real_dev);
@@ -657,7 +658,7 @@ static netdev_features_t vlan_dev_fix_features(struct net_device *dev,
 	if (lower_features & (NETIF_F_IP_CSUM|NETIF_F_IPV6_CSUM))
 		lower_features |= NETIF_F_HW_CSUM;
 	features = netdev_intersect_features(features, lower_features);
-	features |= old_features & (NETIF_F_SOFT_FEATURES | NETIF_F_GSO_SOFTWARE);
+	features |= old_features & (NETIF_F_SOFT_FEATURES | NETIF_F_GSO_SOFTWARE_ALL);
 	features |= NETIF_F_LLTX;
 
 	return features;
@@ -712,13 +713,13 @@ static void vlan_dev_get_stats64(struct net_device *dev,
 
 		p = per_cpu_ptr(vlan_dev_priv(dev)->vlan_pcpu_stats, i);
 		do {
-			start = u64_stats_fetch_begin_irq(&p->syncp);
+			start = u64_stats_fetch_begin(&p->syncp);
 			rxpackets	= u64_stats_read(&p->rx_packets);
 			rxbytes		= u64_stats_read(&p->rx_bytes);
 			rxmulticast	= u64_stats_read(&p->rx_multicast);
 			txpackets	= u64_stats_read(&p->tx_packets);
 			txbytes		= u64_stats_read(&p->tx_bytes);
-		} while (u64_stats_fetch_retry_irq(&p->syncp, start));
+		} while (u64_stats_fetch_retry(&p->syncp, start));
 
 		stats->rx_packets	+= rxpackets;
 		stats->rx_bytes		+= rxbytes;
@@ -783,6 +784,28 @@ static int vlan_dev_get_iflink(const struct net_device *dev)
 	return real_dev->ifindex;
 }
 
+#if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+static int vlan_dev_flow_offload_check(struct flow_offload_hw_path *path)
+{
+	struct net_device *dev = path->dev;
+	struct vlan_dev_priv *vlan = vlan_dev_priv(dev);
+
+	if (path->flags & DEV_PATH_VLAN)
+		return -EEXIST;
+
+	path->flags |= DEV_PATH_VLAN;
+	path->vlan_proto = vlan->vlan_proto;
+	path->vlan_id = vlan->vlan_id;
+	path->virt_dev = dev;
+	path->dev = vlan->real_dev;
+
+	if (vlan->real_dev->netdev_ops->ndo_flow_offload_check)
+		return vlan->real_dev->netdev_ops->ndo_flow_offload_check(path);
+
+	return 0;
+}
+#endif /* CONFIG_NF_FLOW_TABLE */
+
 static int vlan_dev_fill_forward_path(struct net_device_path_ctx *ctx,
 				      struct net_device_path *path)
 {
@@ -802,6 +825,241 @@ static int vlan_dev_fill_forward_path(struct net_device_path_ctx *ctx,
 
 	return 0;
 }
+
+#if IS_ENABLED(CONFIG_MACSEC)
+
+static const struct macsec_ops *vlan_get_macsec_ops(const struct macsec_context *ctx)
+{
+	return vlan_dev_priv(ctx->netdev)->real_dev->macsec_ops;
+}
+
+static int vlan_macsec_offload(int (* const func)(struct macsec_context *),
+			       struct macsec_context *ctx)
+{
+	if (unlikely(!func))
+		return 0;
+
+	return (*func)(ctx);
+}
+
+static int vlan_macsec_dev_open(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_dev_open, ctx);
+}
+
+static int vlan_macsec_dev_stop(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_dev_stop, ctx);
+}
+
+static int vlan_macsec_add_secy(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_add_secy, ctx);
+}
+
+static int vlan_macsec_upd_secy(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_upd_secy, ctx);
+}
+
+static int vlan_macsec_del_secy(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_del_secy, ctx);
+}
+
+static int vlan_macsec_add_rxsc(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_add_rxsc, ctx);
+}
+
+static int vlan_macsec_upd_rxsc(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_upd_rxsc, ctx);
+}
+
+static int vlan_macsec_del_rxsc(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_del_rxsc, ctx);
+}
+
+static int vlan_macsec_add_rxsa(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_add_rxsa, ctx);
+}
+
+static int vlan_macsec_upd_rxsa(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_upd_rxsa, ctx);
+}
+
+static int vlan_macsec_del_rxsa(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_del_rxsa, ctx);
+}
+
+static int vlan_macsec_add_txsa(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_add_txsa, ctx);
+}
+
+static int vlan_macsec_upd_txsa(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_upd_txsa, ctx);
+}
+
+static int vlan_macsec_del_txsa(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_del_txsa, ctx);
+}
+
+static int vlan_macsec_get_dev_stats(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_get_dev_stats, ctx);
+}
+
+static int vlan_macsec_get_tx_sc_stats(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_get_tx_sc_stats, ctx);
+}
+
+static int vlan_macsec_get_tx_sa_stats(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_get_tx_sa_stats, ctx);
+}
+
+static int vlan_macsec_get_rx_sc_stats(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_get_rx_sc_stats, ctx);
+}
+
+static int vlan_macsec_get_rx_sa_stats(struct macsec_context *ctx)
+{
+	const struct macsec_ops *ops = vlan_get_macsec_ops(ctx);
+
+	if (!ops)
+		return -EOPNOTSUPP;
+
+	return vlan_macsec_offload(ops->mdo_get_rx_sa_stats, ctx);
+}
+
+static const struct macsec_ops macsec_offload_ops = {
+	/* Device wide */
+	.mdo_dev_open = vlan_macsec_dev_open,
+	.mdo_dev_stop = vlan_macsec_dev_stop,
+	/* SecY */
+	.mdo_add_secy = vlan_macsec_add_secy,
+	.mdo_upd_secy = vlan_macsec_upd_secy,
+	.mdo_del_secy = vlan_macsec_del_secy,
+	/* Security channels */
+	.mdo_add_rxsc = vlan_macsec_add_rxsc,
+	.mdo_upd_rxsc = vlan_macsec_upd_rxsc,
+	.mdo_del_rxsc = vlan_macsec_del_rxsc,
+	/* Security associations */
+	.mdo_add_rxsa = vlan_macsec_add_rxsa,
+	.mdo_upd_rxsa = vlan_macsec_upd_rxsa,
+	.mdo_del_rxsa = vlan_macsec_del_rxsa,
+	.mdo_add_txsa = vlan_macsec_add_txsa,
+	.mdo_upd_txsa = vlan_macsec_upd_txsa,
+	.mdo_del_txsa = vlan_macsec_del_txsa,
+	/* Statistics */
+	.mdo_get_dev_stats = vlan_macsec_get_dev_stats,
+	.mdo_get_tx_sc_stats = vlan_macsec_get_tx_sc_stats,
+	.mdo_get_tx_sa_stats = vlan_macsec_get_tx_sa_stats,
+	.mdo_get_rx_sc_stats = vlan_macsec_get_rx_sc_stats,
+	.mdo_get_rx_sa_stats = vlan_macsec_get_rx_sa_stats,
+};
+
+#endif
 
 static const struct ethtool_ops vlan_ethtool_ops = {
 	.get_link_ksettings	= vlan_ethtool_get_link_ksettings,
@@ -841,7 +1099,12 @@ static const struct net_device_ops vlan_netdev_ops = {
 #endif
 	.ndo_fix_features	= vlan_dev_fix_features,
 	.ndo_get_iflink		= vlan_dev_get_iflink,
+#if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+	.ndo_flow_offload_check = vlan_dev_flow_offload_check,
+#endif
 	.ndo_fill_forward_path	= vlan_dev_fill_forward_path,
+	.ndo_hwtstamp_get	= vlan_hwtstamp_get,
+	.ndo_hwtstamp_set	= vlan_hwtstamp_set,
 };
 
 static void vlan_dev_free(struct net_device *dev)
@@ -869,6 +1132,9 @@ void vlan_setup(struct net_device *dev)
 	dev->priv_destructor	= vlan_dev_free;
 	dev->ethtool_ops	= &vlan_ethtool_ops;
 
+#if IS_ENABLED(CONFIG_MACSEC)
+	dev->macsec_ops		= &macsec_offload_ops;
+#endif
 	dev->min_mtu		= 0;
 	dev->max_mtu		= ETH_MAX_MTU;
 

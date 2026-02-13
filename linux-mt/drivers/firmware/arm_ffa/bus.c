@@ -59,9 +59,9 @@ static void ffa_device_remove(struct device *dev)
 		ffa_drv->remove(to_ffa_dev(dev));
 }
 
-static int ffa_device_uevent(struct device *dev, struct kobj_uevent_env *env)
+static int ffa_device_uevent(const struct device *dev, struct kobj_uevent_env *env)
 {
-	struct ffa_device *ffa_dev = to_ffa_dev(dev);
+	const struct ffa_device *ffa_dev = to_ffa_dev(dev);
 
 	return add_uevent_var(env, "MODALIAS=arm_ffa:%04x:%pUb",
 			      ffa_dev->vm_id, &ffa_dev->uuid);
@@ -191,6 +191,7 @@ struct ffa_device *ffa_device_register(const uuid_t *uuid, int vm_id,
 	dev = &ffa_dev->dev;
 	dev->bus = &ffa_bus_type;
 	dev->release = ffa_release_device;
+	dev->dma_mask = &dev->coherent_dma_mask;
 	dev_set_name(&ffa_dev->dev, "arm-ffa-%d", id);
 
 	ffa_dev->id = id;

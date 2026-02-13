@@ -6,12 +6,13 @@
  */
 
 #include <linux/clk-provider.h>
+#include <linux/container_of.h>
 #include <linux/delay.h>
+#include <linux/device.h>
 #include <linux/io.h>
-#include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/reset-controller.h>
+#include <linux/spinlock.h>
 
 #include <dt-bindings/clock/bcm63268-clock.h>
 
@@ -137,7 +138,7 @@ static int bcm63268_timer_reset_status(struct reset_controller_dev *rcdev,
 	return !(__raw_readl(reset->regs) & BIT(id));
 }
 
-static struct reset_control_ops bcm63268_timer_reset_ops = {
+static const struct reset_control_ops bcm63268_timer_reset_ops = {
 	.assert = bcm63268_timer_reset_assert,
 	.deassert = bcm63268_timer_reset_deassert,
 	.reset = bcm63268_timer_reset_reset,

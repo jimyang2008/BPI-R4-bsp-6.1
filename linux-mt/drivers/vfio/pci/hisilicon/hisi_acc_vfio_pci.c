@@ -350,6 +350,32 @@ static int vf_qm_func_stop(struct hisi_qm *qm)
 	return hisi_qm_mb(qm, QM_MB_CMD_PAUSE_QM, 0, 0, 0);
 }
 
+static int vf_qm_version_check(struct acc_vf_data *vf_data, struct device *dev)
+{
+	switch (vf_data->acc_magic) {
+	case ACC_DEV_MAGIC_V2:
+		if (vf_data->major_ver != ACC_DRV_MAJOR_VER) {
+			dev_info(dev, "migration driver version<%u.%u> not match!\n",
+				 vf_data->major_ver, vf_data->minor_ver);
+			return -EINVAL;
+		}
+		break;
+	case ACC_DEV_MAGIC_V1:
+		/* Correct dma address */
+		vf_data->eqe_dma = vf_data->qm_eqc_dw[QM_XQC_ADDR_HIGH];
+		vf_data->eqe_dma <<= QM_XQC_ADDR_OFFSET;
+		vf_data->eqe_dma |= vf_data->qm_eqc_dw[QM_XQC_ADDR_LOW];
+		vf_data->aeqe_dma = vf_data->qm_aeqc_dw[QM_XQC_ADDR_HIGH];
+		vf_data->aeqe_dma <<= QM_XQC_ADDR_OFFSET;
+		vf_data->aeqe_dma |= vf_data->qm_aeqc_dw[QM_XQC_ADDR_LOW];
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int vf_qm_check_match(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 			     struct hisi_acc_vf_migration_file *migf)
 {
@@ -360,10 +386,11 @@ static int vf_qm_check_match(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 	u32 que_iso_state;
 	int ret;
 
-	if (migf->total_length < QM_MATCH_SIZE)
-		return -EINVAL;
+	if (migf->total_length < QM_MATCH_SIZE || hisi_acc_vdev->match_done)
+		return 0;
 
-	if (vf_data->acc_magic != ACC_DEV_MAGIC) {
+	ret = vf_qm_version_check(vf_data, dev);
+	if (ret) {
 		dev_err(dev, "failed to match ACC_DEV_MAGIC\n");
 		return -EINVAL;
 	}
@@ -399,13 +426,7 @@ static int vf_qm_check_match(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 		return -EINVAL;
 	}
 
-	ret = qm_write_regs(vf_qm, QM_VF_STATE, &vf_data->vf_qm_state, 1);
-	if (ret) {
-		dev_err(dev, "failed to write QM_VF_STATE\n");
-		return ret;
-	}
-
-	hisi_acc_vdev->vf_qm_state = vf_data->vf_qm_state;
+	hisi_acc_vdev->match_done = true;
 	return 0;
 }
 
@@ -417,7 +438,9 @@ static int vf_qm_get_match_data(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 	int vf_id = hisi_acc_vdev->vf_id;
 	int ret;
 
-	vf_data->acc_magic = ACC_DEV_MAGIC;
+	vf_data->acc_magic = ACC_DEV_MAGIC_V2;
+	vf_data->major_ver = ACC_DRV_MAJOR_VER;
+	vf_data->minor_ver = ACC_DRV_MINOR_VER;
 	/* Save device id */
 	vf_data->dev_id = hisi_acc_vdev->vf_dev->device;
 
@@ -440,6 +463,19 @@ static int vf_qm_get_match_data(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 	return 0;
 }
 
+static void vf_qm_xeqc_save(struct hisi_qm *qm,
+			    struct hisi_acc_vf_migration_file *migf)
+{
+	struct acc_vf_data *vf_data = &migf->vf_data;
+	u16 eq_head, aeq_head;
+
+	eq_head = vf_data->qm_eqc_dw[0] & 0xFFFF;
+	qm_db(qm, 0, QM_DOORBELL_CMD_EQ, eq_head, 0);
+
+	aeq_head = vf_data->qm_aeqc_dw[0] & 0xFFFF;
+	qm_db(qm, 0, QM_DOORBELL_CMD_AEQ, aeq_head, 0);
+}
+
 static int vf_qm_load_data(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 			   struct hisi_acc_vf_migration_file *migf)
 {
@@ -454,6 +490,20 @@ static int vf_qm_load_data(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 
 	if (migf->total_length < sizeof(struct acc_vf_data))
 		return -EINVAL;
+
+	if (!vf_data->eqe_dma || !vf_data->aeqe_dma ||
+	    !vf_data->sqc_dma || !vf_data->cqc_dma) {
+		dev_info(dev, "resume dma addr is NULL!\n");
+		hisi_acc_vdev->vf_qm_state = QM_NOT_READY;
+		return 0;
+	}
+
+	ret = qm_write_regs(qm, QM_VF_STATE, &vf_data->vf_qm_state, 1);
+	if (ret) {
+		dev_err(dev, "failed to write QM_VF_STATE\n");
+		return -EINVAL;
+	}
+	hisi_acc_vdev->vf_qm_state = vf_data->vf_qm_state;
 
 	qm->eqe_dma = vf_data->eqe_dma;
 	qm->aeqe_dma = vf_data->aeqe_dma;
@@ -493,10 +543,6 @@ static int vf_qm_state_save(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 	struct device *dev = &vf_qm->pdev->dev;
 	int ret;
 
-	ret = vf_qm_get_match_data(hisi_acc_vdev, vf_data);
-	if (ret)
-		return ret;
-
 	if (unlikely(qm_wait_dev_not_ready(vf_qm))) {
 		/* Update state and return with match data */
 		vf_data->vf_qm_state = QM_NOT_READY;
@@ -519,12 +565,12 @@ static int vf_qm_state_save(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 		return -EINVAL;
 
 	/* Every reg is 32 bit, the dma address is 64 bit. */
-	vf_data->eqe_dma = vf_data->qm_eqc_dw[1];
+	vf_data->eqe_dma = vf_data->qm_eqc_dw[QM_XQC_ADDR_HIGH];
 	vf_data->eqe_dma <<= QM_XQC_ADDR_OFFSET;
-	vf_data->eqe_dma |= vf_data->qm_eqc_dw[0];
-	vf_data->aeqe_dma = vf_data->qm_aeqc_dw[1];
+	vf_data->eqe_dma |= vf_data->qm_eqc_dw[QM_XQC_ADDR_LOW];
+	vf_data->aeqe_dma = vf_data->qm_aeqc_dw[QM_XQC_ADDR_HIGH];
 	vf_data->aeqe_dma <<= QM_XQC_ADDR_OFFSET;
-	vf_data->aeqe_dma |= vf_data->qm_aeqc_dw[0];
+	vf_data->aeqe_dma |= vf_data->qm_aeqc_dw[QM_XQC_ADDR_LOW];
 
 	/* Through SQC_BT/CQC_BT to get sqc and cqc address */
 	ret = qm_get_sqc(vf_qm, &vf_data->sqc_dma);
@@ -540,6 +586,9 @@ static int vf_qm_state_save(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 	}
 
 	migf->total_length = sizeof(struct acc_vf_data);
+	/* Save eqc and aeqc interrupt information */
+	vf_qm_xeqc_save(vf_qm, migf);
+
 	return 0;
 }
 
@@ -673,12 +722,6 @@ static int hisi_acc_vf_load_state(struct hisi_acc_vf_core_device *hisi_acc_vdev)
 	struct hisi_acc_vf_migration_file *migf = hisi_acc_vdev->resuming_migf;
 	int ret;
 
-	/* Check dev compatibility */
-	ret = vf_qm_check_match(hisi_acc_vdev, migf);
-	if (ret) {
-		dev_err(dev, "failed to match the VF!\n");
-		return ret;
-	}
 	/* Recover data to VF */
 	ret = vf_qm_load_data(hisi_acc_vdev, migf);
 	if (ret) {
@@ -703,6 +746,7 @@ static ssize_t hisi_acc_vf_resume_write(struct file *filp, const char __user *bu
 					size_t len, loff_t *pos)
 {
 	struct hisi_acc_vf_migration_file *migf = filp->private_data;
+	u8 *vf_data = (u8 *)&migf->vf_data;
 	loff_t requested_length;
 	ssize_t done = 0;
 	int ret;
@@ -724,7 +768,7 @@ static ssize_t hisi_acc_vf_resume_write(struct file *filp, const char __user *bu
 		goto out_unlock;
 	}
 
-	ret = copy_from_user(&migf->vf_data, buf, len);
+	ret = copy_from_user(vf_data + *pos, buf, len);
 	if (ret) {
 		done = -EFAULT;
 		goto out_unlock;
@@ -732,6 +776,10 @@ static ssize_t hisi_acc_vf_resume_write(struct file *filp, const char __user *bu
 	*pos += len;
 	done = len;
 	migf->total_length += len;
+
+	ret = vf_qm_check_match(migf->hisi_acc_vdev, migf);
+	if (ret)
+		done = -EFAULT;
 out_unlock:
 	mutex_unlock(&migf->lock);
 	return done;
@@ -749,7 +797,7 @@ hisi_acc_vf_pci_resume(struct hisi_acc_vf_core_device *hisi_acc_vdev)
 {
 	struct hisi_acc_vf_migration_file *migf;
 
-	migf = kzalloc(sizeof(*migf), GFP_KERNEL);
+	migf = kzalloc(sizeof(*migf), GFP_KERNEL_ACCOUNT);
 	if (!migf)
 		return ERR_PTR(-ENOMEM);
 
@@ -764,7 +812,56 @@ hisi_acc_vf_pci_resume(struct hisi_acc_vf_core_device *hisi_acc_vdev)
 
 	stream_open(migf->filp->f_inode, migf->filp);
 	mutex_init(&migf->lock);
+	migf->hisi_acc_vdev = hisi_acc_vdev;
 	return migf;
+}
+
+static long hisi_acc_vf_precopy_ioctl(struct file *filp,
+				      unsigned int cmd, unsigned long arg)
+{
+	struct hisi_acc_vf_migration_file *migf = filp->private_data;
+	struct hisi_acc_vf_core_device *hisi_acc_vdev = migf->hisi_acc_vdev;
+	loff_t *pos = &filp->f_pos;
+	struct vfio_precopy_info info;
+	unsigned long minsz;
+	int ret;
+
+	if (cmd != VFIO_MIG_GET_PRECOPY_INFO)
+		return -ENOTTY;
+
+	minsz = offsetofend(struct vfio_precopy_info, dirty_bytes);
+
+	if (copy_from_user(&info, (void __user *)arg, minsz))
+		return -EFAULT;
+	if (info.argsz < minsz)
+		return -EINVAL;
+
+	mutex_lock(&hisi_acc_vdev->state_mutex);
+	if (hisi_acc_vdev->mig_state != VFIO_DEVICE_STATE_PRE_COPY) {
+		mutex_unlock(&hisi_acc_vdev->state_mutex);
+		return -EINVAL;
+	}
+
+	mutex_lock(&migf->lock);
+
+	if (migf->disabled) {
+		ret = -ENODEV;
+		goto out;
+	}
+
+	if (*pos > migf->total_length) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	info.dirty_bytes = 0;
+	info.initial_bytes = migf->total_length - *pos;
+
+	ret = copy_to_user((void __user *)arg, &info, minsz) ? -EFAULT : 0;
+out:
+	mutex_unlock(&migf->lock);
+	mutex_unlock(&hisi_acc_vdev->state_mutex);
+	return ret;
 }
 
 static ssize_t hisi_acc_vf_save_read(struct file *filp, char __user *buf, size_t len,
@@ -791,7 +888,9 @@ static ssize_t hisi_acc_vf_save_read(struct file *filp, char __user *buf, size_t
 
 	len = min_t(size_t, migf->total_length - *pos, len);
 	if (len) {
-		ret = copy_to_user(buf, &migf->vf_data, len);
+		u8 *vf_data = (u8 *)&migf->vf_data;
+
+		ret = copy_to_user(buf, vf_data + *pos, len);
 		if (ret) {
 			done = -EFAULT;
 			goto out_unlock;
@@ -807,17 +906,19 @@ out_unlock:
 static const struct file_operations hisi_acc_vf_save_fops = {
 	.owner = THIS_MODULE,
 	.read = hisi_acc_vf_save_read,
+	.unlocked_ioctl = hisi_acc_vf_precopy_ioctl,
+	.compat_ioctl = compat_ptr_ioctl,
 	.release = hisi_acc_vf_release_file,
 	.llseek = no_llseek,
 };
 
 static struct hisi_acc_vf_migration_file *
-hisi_acc_vf_stop_copy(struct hisi_acc_vf_core_device *hisi_acc_vdev)
+hisi_acc_open_saving_migf(struct hisi_acc_vf_core_device *hisi_acc_vdev)
 {
 	struct hisi_acc_vf_migration_file *migf;
 	int ret;
 
-	migf = kzalloc(sizeof(*migf), GFP_KERNEL);
+	migf = kzalloc(sizeof(*migf), GFP_KERNEL_ACCOUNT);
 	if (!migf)
 		return ERR_PTR(-ENOMEM);
 
@@ -832,14 +933,53 @@ hisi_acc_vf_stop_copy(struct hisi_acc_vf_core_device *hisi_acc_vdev)
 
 	stream_open(migf->filp->f_inode, migf->filp);
 	mutex_init(&migf->lock);
+	migf->hisi_acc_vdev = hisi_acc_vdev;
 
-	ret = vf_qm_state_save(hisi_acc_vdev, migf);
+	ret = vf_qm_get_match_data(hisi_acc_vdev, &migf->vf_data);
 	if (ret) {
 		fput(migf->filp);
 		return ERR_PTR(ret);
 	}
 
 	return migf;
+}
+
+static struct hisi_acc_vf_migration_file *
+hisi_acc_vf_pre_copy(struct hisi_acc_vf_core_device *hisi_acc_vdev)
+{
+	struct hisi_acc_vf_migration_file *migf;
+
+	migf = hisi_acc_open_saving_migf(hisi_acc_vdev);
+	if (IS_ERR(migf))
+		return migf;
+
+	migf->total_length = QM_MATCH_SIZE;
+	return migf;
+}
+
+static struct hisi_acc_vf_migration_file *
+hisi_acc_vf_stop_copy(struct hisi_acc_vf_core_device *hisi_acc_vdev, bool open)
+{
+	int ret;
+	struct hisi_acc_vf_migration_file *migf = NULL;
+
+	if (open) {
+		/*
+		 * Userspace didn't use PRECOPY support. Hence saving_migf
+		 * is not opened yet.
+		 */
+		migf = hisi_acc_open_saving_migf(hisi_acc_vdev);
+		if (IS_ERR(migf))
+			return migf;
+	} else {
+		migf = hisi_acc_vdev->saving_migf;
+	}
+
+	ret = vf_qm_state_save(hisi_acc_vdev, migf);
+	if (ret)
+		return ERR_PTR(ret);
+
+	return open ? migf : NULL;
 }
 
 static int hisi_acc_vf_stop_device(struct hisi_acc_vf_core_device *hisi_acc_vdev)
@@ -869,6 +1009,31 @@ hisi_acc_vf_set_device_state(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 	u32 cur = hisi_acc_vdev->mig_state;
 	int ret;
 
+	if (cur == VFIO_DEVICE_STATE_RUNNING && new == VFIO_DEVICE_STATE_PRE_COPY) {
+		struct hisi_acc_vf_migration_file *migf;
+
+		migf = hisi_acc_vf_pre_copy(hisi_acc_vdev);
+		if (IS_ERR(migf))
+			return ERR_CAST(migf);
+		get_file(migf->filp);
+		hisi_acc_vdev->saving_migf = migf;
+		return migf->filp;
+	}
+
+	if (cur == VFIO_DEVICE_STATE_PRE_COPY && new == VFIO_DEVICE_STATE_STOP_COPY) {
+		struct hisi_acc_vf_migration_file *migf;
+
+		ret = hisi_acc_vf_stop_device(hisi_acc_vdev);
+		if (ret)
+			return ERR_PTR(ret);
+
+		migf = hisi_acc_vf_stop_copy(hisi_acc_vdev, false);
+		if (IS_ERR(migf))
+			return ERR_CAST(migf);
+
+		return NULL;
+	}
+
 	if (cur == VFIO_DEVICE_STATE_RUNNING && new == VFIO_DEVICE_STATE_STOP) {
 		ret = hisi_acc_vf_stop_device(hisi_acc_vdev);
 		if (ret)
@@ -879,7 +1044,7 @@ hisi_acc_vf_set_device_state(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 	if (cur == VFIO_DEVICE_STATE_STOP && new == VFIO_DEVICE_STATE_STOP_COPY) {
 		struct hisi_acc_vf_migration_file *migf;
 
-		migf = hisi_acc_vf_stop_copy(hisi_acc_vdev);
+		migf = hisi_acc_vf_stop_copy(hisi_acc_vdev, true);
 		if (IS_ERR(migf))
 			return ERR_CAST(migf);
 		get_file(migf->filp);
@@ -907,6 +1072,11 @@ hisi_acc_vf_set_device_state(struct hisi_acc_vf_core_device *hisi_acc_vdev,
 		ret = hisi_acc_vf_load_state(hisi_acc_vdev);
 		if (ret)
 			return ERR_PTR(ret);
+		hisi_acc_vf_disable_fds(hisi_acc_vdev);
+		return NULL;
+	}
+
+	if (cur == VFIO_DEVICE_STATE_PRE_COPY && new == VFIO_DEVICE_STATE_RUNNING) {
 		hisi_acc_vf_disable_fds(hisi_acc_vdev);
 		return NULL;
 	}
@@ -955,6 +1125,14 @@ hisi_acc_vfio_pci_set_device_state(struct vfio_device *vdev,
 	}
 	hisi_acc_vf_state_mutex_unlock(hisi_acc_vdev);
 	return res;
+}
+
+static int
+hisi_acc_vfio_pci_get_data_size(struct vfio_device *vdev,
+				unsigned long *stop_copy_length)
+{
+	*stop_copy_length = sizeof(struct acc_vf_data);
+	return 0;
 }
 
 static int
@@ -1213,6 +1391,7 @@ static void hisi_acc_vfio_pci_close_device(struct vfio_device *core_vdev)
 static const struct vfio_migration_ops hisi_acc_vfio_pci_migrn_state_ops = {
 	.migration_set_state = hisi_acc_vfio_pci_set_device_state,
 	.migration_get_state = hisi_acc_vfio_pci_get_device_state,
+	.migration_get_data_size = hisi_acc_vfio_pci_get_data_size,
 };
 
 static int hisi_acc_vfio_pci_migrn_init_dev(struct vfio_device *core_vdev)
@@ -1225,9 +1404,10 @@ static int hisi_acc_vfio_pci_migrn_init_dev(struct vfio_device *core_vdev)
 	hisi_acc_vdev->vf_id = pci_iov_vf_id(pdev) + 1;
 	hisi_acc_vdev->pf_qm = pf_qm;
 	hisi_acc_vdev->vf_dev = pdev;
+	hisi_acc_vdev->vf_qm_state = QM_NOT_READY;
 	mutex_init(&hisi_acc_vdev->state_mutex);
 
-	core_vdev->migration_flags = VFIO_MIGRATION_STOP_COPY;
+	core_vdev->migration_flags = VFIO_MIGRATION_STOP_COPY | VFIO_MIGRATION_PRE_COPY;
 	core_vdev->mig_ops = &hisi_acc_vfio_pci_migrn_state_ops;
 
 	return vfio_pci_core_init_dev(core_vdev);
@@ -1246,6 +1426,10 @@ static const struct vfio_device_ops hisi_acc_vfio_pci_migrn_ops = {
 	.mmap = hisi_acc_vfio_pci_mmap,
 	.request = vfio_pci_core_request,
 	.match = vfio_pci_core_match,
+	.bind_iommufd = vfio_iommufd_physical_bind,
+	.unbind_iommufd = vfio_iommufd_physical_unbind,
+	.attach_ioas = vfio_iommufd_physical_attach_ioas,
+	.detach_ioas = vfio_iommufd_physical_detach_ioas,
 };
 
 static const struct vfio_device_ops hisi_acc_vfio_pci_ops = {
@@ -1261,6 +1445,10 @@ static const struct vfio_device_ops hisi_acc_vfio_pci_ops = {
 	.mmap = vfio_pci_core_mmap,
 	.request = vfio_pci_core_request,
 	.match = vfio_pci_core_match,
+	.bind_iommufd = vfio_iommufd_physical_bind,
+	.unbind_iommufd = vfio_iommufd_physical_unbind,
+	.attach_ioas = vfio_iommufd_physical_attach_ioas,
+	.detach_ioas = vfio_iommufd_physical_detach_ioas,
 };
 
 static int hisi_acc_vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)

@@ -15,6 +15,8 @@
 #include <rdma/rdma_cm.h>
 #include <linux/mempool.h>
 
+#include "../common/smbdirect/smbdirect_socket.h"
+
 extern int rdma_readwrite_threshold;
 extern int smbd_max_frmr_depth;
 extern int smbd_keep_alive_interval;
@@ -50,14 +52,8 @@ enum smbd_connection_status {
  * 5. mempools for allocating packets
  */
 struct smbd_connection {
-	enum smbd_connection_status transport_status;
+	struct smbdirect_socket socket;
 
-	/* RDMA related */
-	struct rdma_cm_id *id;
-	struct ib_qp_init_attr qp_attr;
-	struct ib_pd *pd;
-	struct ib_cq *send_cq, *recv_cq;
-	struct ib_device_attr dev_attr;
 	int ri_rc;
 	struct completion ri_done;
 	wait_queue_head_t conn_wait;
@@ -111,7 +107,7 @@ struct smbd_connection {
 	/* Used by transport to wait until all MRs are returned */
 	wait_queue_head_t wait_for_mr_cleanup;
 
-	/* Activity accoutning */
+	/* Activity accounting */
 	atomic_t send_pending;
 	wait_queue_head_t wait_send_pending;
 	wait_queue_head_t wait_post_send;
@@ -288,8 +284,7 @@ struct smbd_mr {
 	struct list_head	list;
 	enum mr_state		state;
 	struct ib_mr		*mr;
-	struct scatterlist	*sgl;
-	int			sgl_count;
+	struct sg_table		sgt;
 	enum dma_data_direction	dir;
 	union {
 		struct ib_reg_wr	wr;
@@ -302,8 +297,8 @@ struct smbd_mr {
 
 /* Interfaces to register and deregister MR for RDMA read/write */
 struct smbd_mr *smbd_register_mr(
-	struct smbd_connection *info, struct page *pages[], int num_pages,
-	int offset, int tailsz, bool writing, bool need_invalidate);
+	struct smbd_connection *info, struct iov_iter *iter,
+	bool writing, bool need_invalidate);
 int smbd_deregister_mr(struct smbd_mr *mr);
 
 #else

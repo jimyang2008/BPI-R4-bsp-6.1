@@ -36,6 +36,7 @@ struct nf_flow_key {
 	};
 	struct flow_dissector_key_tcp			tcp;
 	struct flow_dissector_key_ports			tp;
+	struct flow_dissector_key_ip			ip;
 } __aligned(BITS_PER_LONG / 8); /* Ensure that we can do comparisons as longs. */
 
 struct nf_flow_match {
@@ -136,6 +137,7 @@ struct flow_offload_tuple {
 					xmit_type:3,
 					encap_num:2,
 					in_vlan_ingress:2;
+	u8				tos;
 	u16				mtu;
 	union {
 		struct {
@@ -183,6 +185,30 @@ struct flow_offload {
 	u16					type;
 	u32					timeout;
 	struct rcu_head				rcu_head;
+};
+
+enum flow_offload_tnl {
+	FLOW_OFFLOAD_TNL_GRETAP,
+	FLOW_OFFLOAD_TNL_PPTP,
+	FLOW_OFFLOAD_TNL_L2TP_V2,
+	FLOW_OFFLOAD_TNL_L2TP_V3,
+	FLOW_OFFLOAD_TNL_VXLAN,
+	FLOW_OFFLOAD_NATT,
+	__FLOW_OFFLOAD_MAX,
+};
+
+struct flow_offload_hw_path {
+	struct net_device *dev;
+	struct net_device *virt_dev;
+	u32 flags;
+	u32 tnl_type;
+
+	u8 eth_src[ETH_ALEN];
+	u8 eth_dest[ETH_ALEN];
+	u16 vlan_proto;
+	u16 vlan_id;
+	u16 pppoe_sid;
+	u16 dsa_port;
 };
 
 #define NF_FLOW_TIMEOUT (30 * HZ)
@@ -274,8 +300,8 @@ nf_flow_table_offload_del_cb(struct nf_flowtable *flow_table,
 		flow_table->type->put(flow_table);
 }
 
-int flow_offload_route_init(struct flow_offload *flow,
-			    const struct nf_flow_route *route);
+void flow_offload_route_init(struct flow_offload *flow,
+			     struct nf_flow_route *route);
 
 int flow_offload_add(struct nf_flowtable *flow_table, struct flow_offload *flow);
 void flow_offload_refresh(struct nf_flowtable *flow_table,
@@ -292,6 +318,7 @@ int nf_flow_table_init(struct nf_flowtable *flow_table);
 void nf_flow_table_free(struct nf_flowtable *flow_table);
 
 void flow_offload_teardown(struct flow_offload *flow);
+void flow_offload_teardown_by_tuple(struct flow_offload_tuple *tuple);
 
 int nf_flow_table_iterate(struct nf_flowtable *flow_table,
                       void (*iter)(struct nf_flowtable *flowtable,
@@ -340,7 +367,7 @@ int nf_flow_rule_route_ipv6(struct net *net, struct flow_offload *flow,
 int nf_flow_table_offload_init(void);
 void nf_flow_table_offload_exit(void);
 
-static inline __be16 nf_flow_pppoe_proto(const struct sk_buff *skb)
+static inline __be16 __nf_flow_pppoe_proto(const struct sk_buff *skb)
 {
 	__be16 proto;
 
@@ -354,6 +381,16 @@ static inline __be16 nf_flow_pppoe_proto(const struct sk_buff *skb)
 	}
 
 	return 0;
+}
+
+static inline bool nf_flow_pppoe_proto(struct sk_buff *skb, __be16 *inner_proto)
+{
+	if (!pskb_may_pull(skb, ETH_HLEN + PPPOE_SES_HLEN))
+		return false;
+
+	*inner_proto = __nf_flow_pppoe_proto(skb);
+
+	return true;
 }
 
 #define NF_FLOW_TABLE_STAT_INC(net, count) __this_cpu_inc((net)->ft.stat->count)

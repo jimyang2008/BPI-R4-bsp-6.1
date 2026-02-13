@@ -25,6 +25,7 @@
 #include <linux/kexec.h>
 #include <linux/panic_notifier.h>
 #include <linux/sched.h>
+#include <linux/string_helpers.h>
 #include <linux/sysrq.h>
 #include <linux/init.h>
 #include <linux/nmi.h>
@@ -36,6 +37,10 @@
 #include <linux/context_tracking.h>
 #include <trace/events/error_report.h>
 #include <asm/sections.h>
+
+#ifdef CONFIG_ARM64
+#include <asm/memdump.h>
+#endif
 
 #define PANIC_TIMER_STEP 100
 #define PANIC_BLINK_SPD 18
@@ -140,7 +145,7 @@ EXPORT_SYMBOL(panic_blink);
 /*
  * Stop ourself in panic -- architecture code may override this
  */
-void __weak panic_smp_self_stop(void)
+void __weak __noreturn panic_smp_self_stop(void)
 {
 	while (1)
 		cpu_relax();
@@ -150,7 +155,7 @@ void __weak panic_smp_self_stop(void)
  * Stop ourselves in NMI context if another CPU has already panicked. Arch code
  * may override this to prepare for crash dumping, e.g. save regs info.
  */
-void __weak nmi_panic_self_stop(struct pt_regs *regs)
+void __weak __noreturn nmi_panic_self_stop(struct pt_regs *regs)
 {
 	panic_smp_self_stop();
 }
@@ -172,12 +177,16 @@ void __weak crash_smp_send_stop(void)
 	if (cpus_stopped)
 		return;
 
+#ifdef CONFIG_KEXEC_CORE
 	/*
 	 * Note smp_send_stop is the usual smp shutdown function, which
 	 * unfortunately means it may not be hardened to work in a panic
 	 * situation.
 	 */
 	smp_send_stop();
+#else
+	crash_smp_send_stop();
+#endif
 	cpus_stopped = 1;
 }
 
@@ -215,7 +224,7 @@ static void panic_print_sys_info(bool console_flush)
 		show_state();
 
 	if (panic_print & PANIC_PRINT_MEM_INFO)
-		show_mem(0, NULL);
+		show_mem();
 
 	if (panic_print & PANIC_PRINT_TIMER_INFO)
 		sysrq_timer_list_show();
@@ -396,6 +405,10 @@ void panic(const char *fmt, ...)
 
 	panic_print_sys_info(true);
 
+#ifdef CONFIG_ARM64
+	arm64_atf_memory_dump(panic_timeout);
+#endif
+
 	if (!panic_blink)
 		panic_blink = no_blink;
 
@@ -441,6 +454,14 @@ void panic(const char *fmt, ...)
 
 	/* Do not scroll important messages printed above */
 	suppress_printk = 1;
+
+	/*
+	 * The final messages may not have been printed if in a context that
+	 * defers printing (such as NMI) and irq_work is not available.
+	 * Explicitly flush the kernel log buffer one last time.
+	 */
+	console_flush_on_panic(CONSOLE_FLUSH_PENDING);
+
 	local_irq_enable();
 	for (i = 0; ; i += PANIC_TIMER_STEP) {
 		touch_softlockup_watchdog();
@@ -683,6 +704,7 @@ void __warn(const char *file, int line, void *caller, unsigned taint,
 	add_taint(taint, LOCKDEP_STILL_OK);
 }
 
+#ifdef CONFIG_BUG
 #ifndef __WARN_FLAGS
 void warn_slowpath_fmt(const char *file, int line, unsigned taint,
 		       const char *fmt, ...)
@@ -722,8 +744,6 @@ void __warn_printk(const char *fmt, ...)
 EXPORT_SYMBOL(__warn_printk);
 #endif
 
-#ifdef CONFIG_BUG
-
 /* Support resetting WARN*_ONCE state */
 
 static int clear_warn_once_set(void *data, u64 val)
@@ -755,9 +775,15 @@ device_initcall(register_warn_debugfs);
  */
 __visible noinstr void __stack_chk_fail(void)
 {
+	unsigned long flags;
+
 	instrumentation_begin();
+	flags = user_access_save();
+
 	panic("stack-protector: Kernel stack is corrupted in: %pB",
 		__builtin_return_address(0));
+
+	user_access_restore(flags);
 	instrumentation_end();
 }
 EXPORT_SYMBOL(__stack_chk_fail);
@@ -800,8 +826,8 @@ static int __init panic_on_taint_setup(char *s)
 	if (s && !strcmp(s, "nousertaint"))
 		panic_on_taint_nousertaint = true;
 
-	pr_info("panic_on_taint: bitmask=0x%lx nousertaint_mode=%sabled\n",
-		panic_on_taint, panic_on_taint_nousertaint ? "en" : "dis");
+	pr_info("panic_on_taint: bitmask=0x%lx nousertaint_mode=%s\n",
+		panic_on_taint, str_enabled_disabled(panic_on_taint_nousertaint));
 
 	return 0;
 }

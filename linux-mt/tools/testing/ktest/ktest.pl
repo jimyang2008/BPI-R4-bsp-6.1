@@ -804,7 +804,14 @@ sub process_variables {
 	my $end = $3;
 	# append beginning of value to retval
 	$retval = "$retval$begin";
-	if (defined($variable{$var})) {
+	if ($var =~ s/^shell\s+//) {
+	    $retval = `$var`;
+	    if ($?) {
+		doprint "WARNING: $var returned an error\n";
+	    } else {
+		chomp $retval;
+	    }
+	} elsif (defined($variable{$var})) {
 	    $retval = "$retval$variable{$var}";
 	} elsif (defined($remove_undef) && $remove_undef) {
 	    # for if statements, any variable that is not defined,
@@ -836,6 +843,7 @@ sub set_value {
     if ($lvalue =~ /^(TEST|BISECT|CONFIG_BISECT)_TYPE(\[.*\])?$/ &&
 	$prvalue !~ /^(config_|)bisect$/ &&
 	$prvalue !~ /^build$/ &&
+	$prvalue !~ /^make_warnings_file$/ &&
 	$buildonly) {
 
 	# Note if a test is something other than build, then we
@@ -1350,7 +1358,10 @@ sub __eval_option {
 	# If a variable contains itself, use the default var
 	if (($var eq $name) && defined($opt{$var})) {
 	    $o = $opt{$var};
-	    $retval = "$retval$o";
+	    # Only append if the default doesn't contain itself
+	    if ($o !~ m/\$\{$var\}/) {
+		$retval = "$retval$o";
+	    }
 	} elsif (defined($opt{$o})) {
 	    $o = $opt{$o};
 	    $retval = "$retval$o";
@@ -1531,6 +1542,11 @@ sub dodie {
     return if ($in_die);
     $in_die = 1;
 
+    if ($monitor_cnt) {
+	# restore terminal settings
+	system("stty $stty_orig");
+    }
+
     my $i = $iteration;
 
     doprint "CRITICAL FAILURE... [TEST $i] ", @_, "\n";
@@ -1575,11 +1591,6 @@ sub dodie {
 
 	send_email("KTEST: critical failure for test $i [$name]",
 		"Your test started at $script_start_time has failed with:\n@_\n", $log_file);
-    }
-
-    if ($monitor_cnt) {
-	# restore terminal settings
-	system("stty $stty_orig");
     }
 
     if (defined($post_test)) {
@@ -2035,7 +2046,7 @@ sub get_grub_index {
     } elsif ($reboot_type eq "grub2") {
 	$command = "cat $grub_file";
 	$target = '^\s*menuentry.*' . $grub_menu_qt;
-	$skip = '^\s*menuentry';
+	$skip = '^\s*menuentry\s';
 	$submenu = '^\s*submenu\s';
     } elsif ($reboot_type eq "grub2bls") {
 	$command = $grub_bls_get;
@@ -2398,6 +2409,11 @@ sub get_version {
     return if ($have_version);
     doprint "$make kernelrelease ... ";
     $version = `$make -s kernelrelease | tail -1`;
+    if (!length($version)) {
+	run_command "$make allnoconfig" or return 0;
+	doprint "$make kernelrelease ... ";
+	$version = `$make -s kernelrelease | tail -1`;
+    }
     chomp($version);
     doprint "$version\n";
     $have_version = 1;
@@ -2938,8 +2954,6 @@ sub run_bisect_test {
 
     my $failed = 0;
     my $result;
-    my $output;
-    my $ret;
 
     $in_bisect = 1;
 
@@ -4277,6 +4291,14 @@ if ($#new_configs >= 0) {
 if (defined($opt{"LOG_FILE"})) {
     if ($opt{"CLEAR_LOG"}) {
 	unlink $opt{"LOG_FILE"};
+    }
+
+    if (! -e $opt{"LOG_FILE"} && $opt{"LOG_FILE"} =~ m,^(.*/),) {
+        my $dir = $1;
+        if (! -d $dir) {
+            mkpath($dir) or die "Failed to create directories '$dir': $!";
+            print "\nThe log directory $dir did not exist, so it was created.\n";
+        }
     }
     open(LOG, ">> $opt{LOG_FILE}") or die "Can't write to $opt{LOG_FILE}";
     LOG->autoflush(1);

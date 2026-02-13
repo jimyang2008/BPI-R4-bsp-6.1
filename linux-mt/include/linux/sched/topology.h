@@ -203,7 +203,7 @@ struct sched_domain_topology_level {
 #endif
 };
 
-extern void set_sched_topology(struct sched_domain_topology_level *tl);
+extern void __init set_sched_topology(struct sched_domain_topology_level *tl);
 
 #ifdef CONFIG_SCHED_DEBUG
 # define SD_INIT_NAME(type)		.name = #type
@@ -273,6 +273,14 @@ static __always_inline
 void arch_update_thermal_pressure(const struct cpumask *cpus,
 				  unsigned long capped_frequency)
 { }
+#endif
+
+#ifndef arch_scale_freq_ref
+static __always_inline
+unsigned int arch_scale_freq_ref(int cpu)
+{
+	return 0;
+}
 #endif
 
 static inline int task_node(const struct task_struct *p)

@@ -1,0 +1,11 @@
+Package: spidev-test
+Version: 6.6.104-6.6.104
+Depends: libc, kmod-spi-dev
+Source: feeds/base/utils/spidev_test
+SourceName: spidev-test
+Section: utils
+SourceDateEpoch: 1768201544
+URL: http://www.kernel.org
+Architecture: aarch64_cortex-a53
+Installed-Size: 20480
+Description:  SPI testing utility.

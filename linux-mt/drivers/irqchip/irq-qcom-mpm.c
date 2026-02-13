@@ -14,7 +14,7 @@
 #include <linux/mailbox_client.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/pm_domain.h>
 #include <linux/slab.h>
@@ -225,6 +225,9 @@ static int qcom_mpm_alloc(struct irq_domain *domain, unsigned int virq,
 	ret = irq_domain_translate_twocell(domain, fwspec, &pin, &type);
 	if (ret)
 		return ret;
+
+	if (pin == GPIO_NO_WAKE_IRQ)
+		return irq_domain_disconnect_hierarchy(domain, virq);
 
 	ret = irq_domain_set_hwirq_and_chip(domain, virq, pin,
 					    &qcom_mpm_chip, priv);

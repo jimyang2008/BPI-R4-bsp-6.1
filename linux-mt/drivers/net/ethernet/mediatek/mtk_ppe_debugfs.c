@@ -47,7 +47,7 @@ static const char *mtk_foe_pkt_type_str(int type)
 static void
 mtk_print_addr(struct seq_file *m, u32 *addr, bool ipv6)
 {
-	u32 n_addr[4];
+	__be32 n_addr[4];
 	int i;
 
 	if (!ipv6) {
@@ -125,6 +125,8 @@ mtk_ppe_debugfs_foe_show(struct seq_file *m, void *private, bool bind)
 			break;
 		}
 
+		seq_printf(m, " ppe=%d", ppe->index);
+
 		seq_printf(m, " orig=");
 		mtk_print_addr_info(m, &ai);
 
@@ -191,4 +193,271 @@ int mtk_ppe_debugfs_init(struct mtk_ppe *ppe, int index)
 	debugfs_create_file("bind", S_IRUGO, root, ppe, &mtk_ppe_debugfs_foe_bind_fops);
 
 	return 0;
+}
+
+static int
+mtk_ppe_internal_debugfs_read_dscp(struct seq_file *m, void *private)
+{
+	struct mtk_eth *eth = m->private;
+
+	if (eth->dscp_toggle == 0)
+		pr_info("Keep DSCP mode is disabled now!\n");
+	else if (eth->dscp_toggle == 1)
+		pr_info("Keep DSCP mode is enabled now!\n");
+
+	return 0;
+}
+
+static int mtk_ppe_internal_debugfs_open_dscp(struct inode *inode, struct file *file)
+{
+	return single_open(file, mtk_ppe_internal_debugfs_read_dscp,
+			   inode->i_private);
+}
+
+static ssize_t
+mtk_ppe_internal_debugfs_write_dscp(struct file *file, const char __user *buffer,
+				    size_t count, loff_t *data)
+{
+	struct seq_file *m = file->private_data;
+	struct mtk_eth *eth = m->private;
+	char buf[8];
+	int len = count;
+
+	if ((len > 8) || copy_from_user(buf, buffer, len))
+		return -EFAULT;
+
+	if (buf[0] == '0') {
+		pr_info("Keep DSCP mode is going to be disabled !\n");
+		eth->dscp_toggle = 0;
+	} else if (buf[0] == '1') {
+		pr_info("Keep DSCP mode is going to be enabled !\n");
+		eth->dscp_toggle = 1;
+	}
+
+	return len;
+}
+
+static const struct file_operations mtk_ppe_internal_debugfs_dscp_fops = {
+	.open = mtk_ppe_internal_debugfs_open_dscp,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.write = mtk_ppe_internal_debugfs_write_dscp,
+	.release = single_release,
+};
+
+static int
+mtk_ppe_internal_debugfs_read_qos(struct seq_file *m, void *private)
+{
+	struct mtk_eth *eth = m->private;
+
+	if (eth->qos_toggle == 0)
+		pr_info("HQoS is disabled now!\n");
+	else if (eth->qos_toggle == 1)
+		pr_info("HQoS is enabled now!\n");
+	else if (eth->qos_toggle == 2)
+		pr_info("Per-port-per-queue mode is enabled!\n");
+	else if (eth->qos_toggle == 3)
+		pr_info("Adaptive Per-port-per-queue mode is enabled!\n");
+
+	return 0;
+}
+
+static int mtk_ppe_internal_debugfs_open_qos(struct inode *inode, struct file *file)
+{
+	return single_open(file, mtk_ppe_internal_debugfs_read_qos,
+			   inode->i_private);
+}
+
+static ssize_t
+mtk_ppe_internal_debugfs_write_qos(struct file *file, const char __user *buffer,
+				   size_t count, loff_t *data)
+{
+	struct seq_file *m = file->private_data;
+	struct mtk_eth *eth = m->private;
+	char buf[8];
+	int len = count;
+
+	if ((len > 8) || copy_from_user(buf, buffer, len))
+		return -EFAULT;
+
+	if (buf[0] == '0') {
+		pr_info("HQoS is going to be disabled !\n");
+		eth->qos_toggle = 0;
+	} else if (buf[0] == '1') {
+		pr_info("HQoS mode is going to be enabled !\n");
+		eth->qos_toggle = 1;
+	} else if (buf[0] == '2') {
+		pr_info("Per-port-per-queue mode is going to be enabled !\n");
+		pr_info("PPPQ use qid 3~14 (scheduler 0).\n");
+		eth->qos_toggle = 2;
+	} else if (buf[0] == '3') {
+		pr_info("Adaptive Per-port-per-queue mode is going to be enabled !\n");
+		pr_info("PPPQ use qid 3~14 (scheduler 0).\n");
+		eth->qos_toggle = 3;
+		eth->qdma_shaper.threshold = 6000;
+	}
+
+	return len;
+}
+
+static const struct file_operations mtk_ppe_internal_debugfs_qos_fops = {
+	.open = mtk_ppe_internal_debugfs_open_qos,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.write = mtk_ppe_internal_debugfs_write_qos,
+	.release = single_release,
+};
+
+static int
+mtk_ppe_internal_debugfs_level_show(struct seq_file *m, void *private)
+{
+	struct mtk_eth *eth = m->private;
+
+	seq_printf(m, "PPE debug level=%d\n", eth->debug_level);
+
+	return 0;
+}
+
+static int
+mtk_ppe_internal_debugfs_level_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, mtk_ppe_internal_debugfs_level_show,
+			   inode->i_private);
+}
+
+static ssize_t
+mtk_ppe_internal_debugfs_level_write(struct file *file, const char __user *buf,
+				     size_t count, loff_t *offset)
+{
+	struct seq_file *m = file->private_data;
+	struct mtk_eth *eth = (struct mtk_eth *)m->private;
+	char tmp[8] = {0};
+	u32 level;
+
+	if ((count > sizeof(tmp)))
+		return -EFAULT;
+
+	if (copy_from_user(tmp, buf, count))
+		return -EFAULT;
+
+	if (sscanf(tmp, "%d", &level) != 1)
+		return -EFAULT;
+
+	if (level < 0 || level > 7) {
+		pr_warn("The input debug level is invalid, "
+			"it should range from 0 to 7.\n");
+		return -EINVAL;
+	}
+
+	eth->debug_level = level;
+
+	return count;
+}
+
+static const struct file_operations mtk_ppe_internal_debugfs_level_fops = {
+	.open = mtk_ppe_internal_debugfs_level_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.write = mtk_ppe_internal_debugfs_level_write,
+	.release = single_release,
+};
+
+static int
+mtk_ppe_internal_debugfs_foe_all_show(struct seq_file *m, void *private)
+{
+	struct mtk_eth *eth = m->private;
+	void *backup;
+	int i;
+
+	backup = m->private;
+	for (i = 0; i < eth->soc->ppe_num; i++) {
+		if (!eth->ppe[i])
+			continue;
+
+		m->private = eth->ppe[i];
+		mtk_ppe_debugfs_foe_show(m, private, false);
+	}
+	m->private = backup;
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(mtk_ppe_internal_debugfs_foe_all);
+
+static int
+mtk_ppe_internal_debugfs_foe_bind_show(struct seq_file *m, void *private)
+{
+	struct mtk_eth *eth = m->private;
+	void *backup;
+	int i;
+
+	backup = m->private;
+	for (i = 0; i < eth->soc->ppe_num; i++) {
+		if (!eth->ppe[i])
+			continue;
+
+		m->private = eth->ppe[i];
+		mtk_ppe_debugfs_foe_show(m, private, true);
+	}
+	m->private = backup;
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(mtk_ppe_internal_debugfs_foe_bind);
+
+int mtk_ppe_internal_debugfs_init(struct mtk_eth *eth)
+{
+	struct dentry *root;
+	char name[16], name_symlink[48];
+	long i;
+	int ret = 0;
+
+	root = debugfs_create_dir("mtk_ppe", NULL);
+	if (!root)
+		return -ENOMEM;
+
+	debugfs_create_file("entries", S_IRUGO, root, eth,
+			    &mtk_ppe_internal_debugfs_foe_all_fops);
+	debugfs_create_file("bind", S_IRUGO, root, eth,
+			    &mtk_ppe_internal_debugfs_foe_bind_fops);
+	debugfs_create_file("dscp_toggle", S_IRUGO, root, eth,
+			    &mtk_ppe_internal_debugfs_dscp_fops);
+	debugfs_create_file("qos_toggle", S_IRUGO, root, eth,
+			    &mtk_ppe_internal_debugfs_qos_fops);
+	debugfs_create_file("debug_level", S_IRUGO, root, eth,
+			    &mtk_ppe_internal_debugfs_level_fops);
+
+	for (i = 0; i < (mtk_is_netsys_v2_or_greater(eth) ? 4 : 2); i++) {
+		ret = snprintf(name, sizeof(name), "qdma_sch%ld", i);
+		if (ret != strlen(name)) {
+			ret = -ENOMEM;
+			goto err;
+		}
+		ret = snprintf(name_symlink, sizeof(name_symlink),
+			       "/sys/kernel/debug/mtketh/qdma_sch%ld", i);
+		if (ret != strlen(name_symlink)) {
+			ret = -ENOMEM;
+			goto err;
+		}
+		debugfs_create_symlink(name, root, name_symlink);
+	}
+
+	for (i = 0; i < MTK_QDMA_NUM_QUEUES; i++) {
+		ret = snprintf(name, sizeof(name), "qdma_txq%ld", i);
+		if (ret != strlen(name)) {
+			ret = -ENOMEM;
+			goto err;
+		}
+		ret = snprintf(name_symlink, sizeof(name_symlink),
+			       "/sys/kernel/debug/mtketh/qdma_txq%ld", i);
+		if (ret != strlen(name_symlink)) {
+			ret = -ENOMEM;
+			goto err;
+		}
+		debugfs_create_symlink(name, root, name_symlink);
+	}
+
+	return 0;
+
+err:
+	return ret;
 }

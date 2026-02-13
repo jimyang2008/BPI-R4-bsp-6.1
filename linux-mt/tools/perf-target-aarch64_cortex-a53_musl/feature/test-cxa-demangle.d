@@ -1,0 +1,23 @@
+/ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/perf-target-aarch64_cortex-a53_musl/feature/test-cxa-demangle.bin: \
+ test-cxa-demangle.cpp \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdc-predef.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdio.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/features.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/alltypes.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/stdlib.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/cstdlib \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/aarch64-openwrt-linux-musl/bits/c++config.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/aarch64-openwrt-linux-musl/bits/os_defines.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/aarch64-openwrt-linux-musl/bits/cpu_defines.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/pstl/pstl_config.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdlib.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/alloca.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/bits/std_abs.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/cxxabi.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stddef.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/aarch64-openwrt-linux-musl/bits/cxxabi_tweaks.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/bits/cxxabi_forced.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/bits/cxxabi_init_exception.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/typeinfo \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/bits/exception.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/aarch64-openwrt-linux-musl/include/c++/13.3.0/bits/hash_bytes.h

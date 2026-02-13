@@ -132,8 +132,8 @@ static int aq_get_rxpages(struct aq_ring_s *self, struct aq_ring_buff_s *rxbuf)
 	return 0;
 }
 
-static struct aq_ring_s *aq_ring_alloc(struct aq_ring_s *self,
-				       struct aq_nic_s *aq_nic)
+static int aq_ring_alloc(struct aq_ring_s *self,
+			 struct aq_nic_s *aq_nic)
 {
 	int err = 0;
 
@@ -156,46 +156,29 @@ static struct aq_ring_s *aq_ring_alloc(struct aq_ring_s *self,
 err_exit:
 	if (err < 0) {
 		aq_ring_free(self);
-		self = NULL;
 	}
 
-	return self;
+	return err;
 }
 
-struct aq_ring_s *aq_ring_tx_alloc(struct aq_ring_s *self,
-				   struct aq_nic_s *aq_nic,
-				   unsigned int idx,
-				   struct aq_nic_cfg_s *aq_nic_cfg)
+int aq_ring_tx_alloc(struct aq_ring_s *self,
+		     struct aq_nic_s *aq_nic,
+		     unsigned int idx,
+		     struct aq_nic_cfg_s *aq_nic_cfg)
 {
-	int err = 0;
-
 	self->aq_nic = aq_nic;
 	self->idx = idx;
 	self->size = aq_nic_cfg->txds;
 	self->dx_size = aq_nic_cfg->aq_hw_caps->txd_size;
 
-	self = aq_ring_alloc(self, aq_nic);
-	if (!self) {
-		err = -ENOMEM;
-		goto err_exit;
-	}
-
-err_exit:
-	if (err < 0) {
-		aq_ring_free(self);
-		self = NULL;
-	}
-
-	return self;
+	return aq_ring_alloc(self, aq_nic);
 }
 
-struct aq_ring_s *aq_ring_rx_alloc(struct aq_ring_s *self,
-				   struct aq_nic_s *aq_nic,
-				   unsigned int idx,
-				   struct aq_nic_cfg_s *aq_nic_cfg)
+int aq_ring_rx_alloc(struct aq_ring_s *self,
+		     struct aq_nic_s *aq_nic,
+		     unsigned int idx,
+		     struct aq_nic_cfg_s *aq_nic_cfg)
 {
-	int err = 0;
-
 	self->aq_nic = aq_nic;
 	self->idx = idx;
 	self->size = aq_nic_cfg->rxds;
@@ -217,22 +200,10 @@ struct aq_ring_s *aq_ring_rx_alloc(struct aq_ring_s *self,
 		self->tail_size = 0;
 	}
 
-	self = aq_ring_alloc(self, aq_nic);
-	if (!self) {
-		err = -ENOMEM;
-		goto err_exit;
-	}
-
-err_exit:
-	if (err < 0) {
-		aq_ring_free(self);
-		self = NULL;
-	}
-
-	return self;
+	return aq_ring_alloc(self, aq_nic);
 }
 
-struct aq_ring_s *
+int
 aq_ring_hwts_rx_alloc(struct aq_ring_s *self, struct aq_nic_s *aq_nic,
 		      unsigned int idx, unsigned int size, unsigned int dx_size)
 {
@@ -250,10 +221,10 @@ aq_ring_hwts_rx_alloc(struct aq_ring_s *self, struct aq_nic_s *aq_nic,
 					   GFP_KERNEL);
 	if (!self->dx_ring) {
 		aq_ring_free(self);
-		return NULL;
+		return -ENOMEM;
 	}
 
-	return self;
+	return 0;
 }
 
 int aq_ring_init(struct aq_ring_s *self, const enum atl_ring_type ring_type)
@@ -532,10 +503,10 @@ static bool aq_add_rx_fragment(struct device *dev,
 					      buff_->rxdata.pg_off,
 					      buff_->len,
 					      DMA_FROM_DEVICE);
-		skb_frag_off_set(frag, buff_->rxdata.pg_off);
-		skb_frag_size_set(frag, buff_->len);
 		sinfo->xdp_frags_size += buff_->len;
-		__skb_frag_set_page(frag, buff_->rxdata.page);
+		skb_frag_fill_page_desc(frag, buff_->rxdata.page,
+					buff_->rxdata.pg_off,
+					buff_->len);
 
 		buff_->is_cleaned = 1;
 
@@ -948,6 +919,19 @@ void aq_ring_free(struct aq_ring_s *self)
 	}
 }
 
+void aq_ring_hwts_rx_free(struct aq_ring_s *self)
+{
+	if (!self)
+		return;
+
+	if (self->dx_ring) {
+		dma_free_coherent(aq_nic_get_dev(self->aq_nic),
+				  self->size * self->dx_size + AQ_CFG_RXDS_DEF,
+				  self->dx_ring, self->dx_ring_pa);
+		self->dx_ring = NULL;
+	}
+}
+
 unsigned int aq_ring_fill_stats_data(struct aq_ring_s *self, u64 *data)
 {
 	unsigned int count;
@@ -957,7 +941,7 @@ unsigned int aq_ring_fill_stats_data(struct aq_ring_s *self, u64 *data)
 		/* This data should mimic aq_ethtool_queue_rx_stat_names structure */
 		do {
 			count = 0;
-			start = u64_stats_fetch_begin_irq(&self->stats.rx.syncp);
+			start = u64_stats_fetch_begin(&self->stats.rx.syncp);
 			data[count] = self->stats.rx.packets;
 			data[++count] = self->stats.rx.jumbo_packets;
 			data[++count] = self->stats.rx.lro_packets;
@@ -974,15 +958,15 @@ unsigned int aq_ring_fill_stats_data(struct aq_ring_s *self, u64 *data)
 			data[++count] = self->stats.rx.xdp_tx;
 			data[++count] = self->stats.rx.xdp_invalid;
 			data[++count] = self->stats.rx.xdp_redirect;
-		} while (u64_stats_fetch_retry_irq(&self->stats.rx.syncp, start));
+		} while (u64_stats_fetch_retry(&self->stats.rx.syncp, start));
 	} else {
 		/* This data should mimic aq_ethtool_queue_tx_stat_names structure */
 		do {
 			count = 0;
-			start = u64_stats_fetch_begin_irq(&self->stats.tx.syncp);
+			start = u64_stats_fetch_begin(&self->stats.tx.syncp);
 			data[count] = self->stats.tx.packets;
 			data[++count] = self->stats.tx.queue_restarts;
-		} while (u64_stats_fetch_retry_irq(&self->stats.tx.syncp, start));
+		} while (u64_stats_fetch_retry(&self->stats.tx.syncp, start));
 	}
 
 	return ++count;

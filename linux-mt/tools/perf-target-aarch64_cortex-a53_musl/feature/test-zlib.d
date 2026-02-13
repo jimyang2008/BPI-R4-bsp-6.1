@@ -1,0 +1,19 @@
+/ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/perf-target-aarch64_cortex-a53_musl/feature/test-zlib.bin: \
+ test-zlib.c \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdc-predef.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/zlib.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/zconf.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stddef.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/alltypes.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/limits.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/features.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/limits.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/sys/types.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/endian.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/fortify/sys/select.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/sys/select.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdarg.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/fortify/unistd.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/unistd.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/posix.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/fortify/fortify-headers.h

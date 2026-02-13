@@ -71,9 +71,6 @@ enum {
 
 	/* Cgroup is frozen. */
 	CGRP_FROZEN,
-
-	/* Control group has to be killed. */
-	CGRP_KILL,
 };
 
 /* cgroup_root->flags */
@@ -238,7 +235,7 @@ struct css_set {
 	 * Lists running through all tasks using this cgroup group.
 	 * mg_tasks lists tasks which belong to this cset but are in the
 	 * process of being migrated out or in.  Protected by
-	 * css_set_rwsem, but, during migration, once tasks are moved to
+	 * css_set_lock, but, during migration, once tasks are moved to
 	 * mg_tasks, it can be read safely while holding cgroup_mutex.
 	 */
 	struct list_head tasks;
@@ -342,6 +339,20 @@ struct cgroup_rstat_cpu {
 	struct cgroup_base_stat last_bstat;
 
 	/*
+	 * This field is used to record the cumulative per-cpu time of
+	 * the cgroup and its descendants. Currently it can be read via
+	 * eBPF/drgn etc, and we are still trying to determine how to
+	 * expose it in the cgroupfs interface.
+	 */
+	struct cgroup_base_stat subtree_bstat;
+
+	/*
+	 * Snapshots at the last reading. These are used to calculate the
+	 * deltas to propagate to the per-cpu subtree_bstat.
+	 */
+	struct cgroup_base_stat last_subtree_bstat;
+
+	/*
 	 * Child cgroups with stat updates on this cpu since the last read
 	 * are linked on the parent's ->updated_children through
 	 * ->updated_next.
@@ -423,6 +434,9 @@ struct cgroup {
 	int nr_populated_threaded_children;
 
 	int nr_threaded_children;	/* # of live threaded child cgroups */
+
+	/* sequence number for cgroup.kill, serialized by css_set_lock. */
+	unsigned int kill_seq;
 
 	struct kernfs_node *kn;		/* cgroup kernfs entry */
 	struct cgroup_file procs_file;	/* handle for "cgroup.procs" */
@@ -507,6 +521,10 @@ struct cgroup {
 	/* Used to store internal freezer state */
 	struct cgroup_freezer_state freezer;
 
+#ifdef CONFIG_BPF_SYSCALL
+	struct bpf_local_storage __rcu  *bpf_cgrp_storage;
+#endif
+
 	/* All ancestors including self */
 	struct cgroup *ancestors[];
 };
@@ -525,6 +543,10 @@ struct cgroup_root {
 	/* Unique id for this hierarchy. */
 	int hierarchy_id;
 
+	/* A list running through the active hierarchies */
+	struct list_head root_list;
+	struct rcu_head rcu;	/* Must be near the top */
+
 	/*
 	 * The root cgroup. The containing cgroup_root will be destroyed on its
 	 * release. cgrp->ancestors[0] will be used overflowing into the
@@ -537,9 +559,6 @@ struct cgroup_root {
 
 	/* Number of cgroups in the hierarchy, used only for /proc/cgroups */
 	atomic_t nr_cgrps;
-
-	/* A list running through the active hierarchies */
-	struct list_head root_list;
 
 	/* Hierarchy-specific flags */
 	unsigned int flags;
@@ -656,6 +675,8 @@ struct cgroup_subsys {
 	void (*css_reset)(struct cgroup_subsys_state *css);
 	void (*css_rstat_flush)(struct cgroup_subsys_state *css, int cpu);
 	int (*css_extra_stat_show)(struct seq_file *seq,
+				   struct cgroup_subsys_state *css);
+	int (*css_local_stat_show)(struct seq_file *seq,
 				   struct cgroup_subsys_state *css);
 
 	int (*can_attach)(struct cgroup_taskset *tset);

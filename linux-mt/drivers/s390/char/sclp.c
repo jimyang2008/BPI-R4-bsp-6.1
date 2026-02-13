@@ -69,12 +69,19 @@ static struct init_sccb *sclp_init_sccb;
 /* Number of console pages to allocate, used by sclp_con.c and sclp_vt220.c */
 int sclp_console_pages = SCLP_CONSOLE_PAGES;
 /* Flag to indicate if buffer pages are dropped on buffer full condition */
-int sclp_console_drop = 1;
+bool sclp_console_drop = true;
 /* Number of times the console dropped buffer pages */
 unsigned long sclp_console_full;
 
 /* The currently active SCLP command word. */
 static sclp_cmdw_t active_cmd;
+
+static inline struct sccb_header *sclpint_to_sccb(u32 sccb_int)
+{
+	if (sccb_int)
+		return __va(sccb_int);
+	return NULL;
+}
 
 static inline void sclp_trace(int prio, char *id, u32 a, u64 b, bool err)
 {
@@ -195,12 +202,7 @@ __setup("sclp_con_pages=", sclp_setup_console_pages);
 
 static int __init sclp_setup_console_drop(char *str)
 {
-	int drop, rc;
-
-	rc = kstrtoint(str, 0, &drop);
-	if (!rc)
-		sclp_console_drop = drop;
-	return 1;
+	return kstrtobool(str, &sclp_console_drop) == 0;
 }
 
 __setup("sclp_con_drop=", sclp_setup_console_drop);
@@ -625,7 +627,7 @@ __sclp_find_req(u32 sccb)
 
 static bool ok_response(u32 sccb_int, sclp_cmdw_t cmd)
 {
-	struct sccb_header *sccb = (struct sccb_header *)__va(sccb_int);
+	struct sccb_header *sccb = sclpint_to_sccb(sccb_int);
 	struct evbuf_header *evbuf;
 	u16 response;
 
@@ -664,7 +666,7 @@ static void sclp_interrupt_handler(struct ext_code ext_code,
 
 	/* INT: Interrupt received (a=intparm, b=cmd) */
 	sclp_trace_sccb(0, "INT", param32, active_cmd, active_cmd,
-			(struct sccb_header *)__va(finished_sccb),
+			sclpint_to_sccb(finished_sccb),
 			!ok_response(finished_sccb, active_cmd));
 
 	if (finished_sccb) {
@@ -1200,26 +1202,35 @@ sclp_reboot_event(struct notifier_block *this, unsigned long event, void *ptr)
 }
 
 static struct notifier_block sclp_reboot_notifier = {
-	.notifier_call = sclp_reboot_event
+	.notifier_call = sclp_reboot_event,
+	.priority      = INT_MIN,
 };
 
 static ssize_t con_pages_show(struct device_driver *dev, char *buf)
 {
-	return sprintf(buf, "%i\n", sclp_console_pages);
+	return sysfs_emit(buf, "%i\n", sclp_console_pages);
 }
 
 static DRIVER_ATTR_RO(con_pages);
 
-static ssize_t con_drop_show(struct device_driver *dev, char *buf)
+static ssize_t con_drop_store(struct device_driver *dev, const char *buf, size_t count)
 {
-	return sprintf(buf, "%i\n", sclp_console_drop);
+	int rc;
+
+	rc = kstrtobool(buf, &sclp_console_drop);
+	return rc ?: count;
 }
 
-static DRIVER_ATTR_RO(con_drop);
+static ssize_t con_drop_show(struct device_driver *dev, char *buf)
+{
+	return sysfs_emit(buf, "%i\n", sclp_console_drop);
+}
+
+static DRIVER_ATTR_RW(con_drop);
 
 static ssize_t con_full_show(struct device_driver *dev, char *buf)
 {
-	return sprintf(buf, "%lu\n", sclp_console_full);
+	return sysfs_emit(buf, "%lu\n", sclp_console_full);
 }
 
 static DRIVER_ATTR_RO(con_full);
@@ -1290,6 +1301,7 @@ sclp_init(void)
 fail_unregister_reboot_notifier:
 	unregister_reboot_notifier(&sclp_reboot_notifier);
 fail_init_state_uninitialized:
+	list_del(&sclp_state_change_event.list);
 	sclp_init_state = sclp_init_state_uninitialized;
 	free_page((unsigned long) sclp_read_sccb);
 	free_page((unsigned long) sclp_init_sccb);

@@ -25,11 +25,16 @@
 		led-failsafe = &led_system_blue;
 		led-running = &led_system_green;
 		led-upgrade = &led_system_blue;
+		mmc0 = &mmc0;
+		mmc1 = &mmc1;
 	};
 
 	chosen {
 		stdout-path = "serial0:115200n8";
 		bootargs = "earlycon=uart8250,mmio32,0x11002000 console=ttyS0,115200n1 swiotlb=512";
+		rootdisk-emmc = <&emmc_rootfs>;
+		rootdisk-sd = <&sd_rootfs>;
+		rootdisk-snfi = <&ubi_rootfs>;
 	};
 
 	cpus {
@@ -80,6 +85,7 @@
 
 	memory@40000000 {
 		reg = <0 0x40000000 0 0x40000000>;
+		device_type = "memory";
 	};
 
 	reg_1p8v: regulator-1p8v {
@@ -149,9 +155,9 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		switch@0 {
+		switch@1f {
 			compatible = "mediatek,mt7531";
-			reg = <0>;
+			reg = <31>;
 			interrupt-controller;
 			#interrupt-cells = <1>;
 			interrupt-parent = <&pio>;
@@ -231,6 +237,26 @@
 	assigned-clocks = <&topckgen CLK_TOP_MSDC30_0_SEL>;
 	assigned-clock-parents = <&topckgen CLK_TOP_UNIV48M>;
 	non-removable;
+
+	card@0 {
+		compatible = "mmc-card";
+		reg = <0>;
+
+		block {
+			compatible = "block-device";
+			partitions {
+				block-partition-env {
+					partname = "ubootenv";
+					nvmem-layout {
+						compatible = "u-boot,env";
+					};
+				};
+				emmc_rootfs: block-partition-production {
+					partname = "production";
+				};
+			};
+		};
+	};
 };
 
 &mmc1 {
@@ -241,12 +267,31 @@
 	bus-width = <4>;
 	max-frequency = <50000000>;
 	cap-sd-highspeed;
-	r_smpl = <1>;
 	cd-gpios = <&pio 81 GPIO_ACTIVE_LOW>;
 	vmmc-supply = <&reg_3p3v>;
 	vqmmc-supply = <&reg_3p3v>;
 	assigned-clocks = <&topckgen CLK_TOP_MSDC30_1_SEL>;
 	assigned-clock-parents = <&topckgen CLK_TOP_UNIV48M>;
+
+	card@0 {
+		compatible = "mmc-card";
+		reg = <0>;
+
+		block {
+			compatible = "block-device";
+			partitions {
+				block-partition-env {
+					partname = "ubootenv";
+					nvmem-layout {
+						compatible = "u-boot,env";
+					};
+				};
+				sd_rootfs: block-partition-production {
+					partname = "production";
+				};
+			};
+		};
+	};
 };
 
 &nandc {
@@ -280,15 +325,30 @@
 				read-only;
 			};
 
-			partition@80000 {
-				label = "fip";
-				reg = <0x80000 0x200000>;
-				read-only;
-			};
-
-			partition@280000 {
+			ubi: partition@80000 {
 				label = "ubi";
-				reg = <0x280000 0x7d80000>;
+				reg = <0x80000 0x7f80000>;
+				compatible = "linux,ubi";
+
+				volumes {
+					ubi-volume-ubootenv {
+						volname = "ubootenv";
+						nvmem-layout {
+							compatible = "u-boot,env-redundant-bool";
+						};
+					};
+
+					ubi-volume-ubootenv2 {
+						volname = "ubootenv2";
+						nvmem-layout {
+							compatible = "u-boot,env-redundant-bool";
+						};
+					};
+
+					ubi_rootfs: ubi-volume-fit {
+						volname = "fit";
+					};
+				};
 			};
 		};
 	};
@@ -319,8 +379,8 @@
 	/* eMMC is shared pin with parallel NAND */
 	emmc_pins_default: emmc-pins-default {
 		mux {
-			function = "emmc", "emmc_rst";
-			groups = "emmc";
+			function = "emmc";
+			groups = "emmc", "emmc_rst";
 		};
 
 		/* "NDL0","NDL1","NDL2","NDL3","NDL4","NDL5","NDL6","NDL7",

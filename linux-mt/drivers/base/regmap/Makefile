@@ -2,16 +2,15 @@
 # For include/trace/define_trace.h to include trace.h
 CFLAGS_regmap.o := -I$(src)
 
-regmap-core-objs = regmap.o regcache.o regcache-rbtree.o regcache-flat.o
+regmap-core-objs = regmap.o regcache.o regcache-rbtree.o regcache-flat.o regcache-maple.o
 ifdef CONFIG_DEBUG_FS
 regmap-core-objs += regmap-debugfs.o
 endif
-ifdef CONFIG_REGCACHE_COMPRESSED
-regmap-core-objs += regcache-lzo.o
-endif
 obj-$(CONFIG_REGMAP) += regmap-core.o
+obj-$(CONFIG_REGMAP_KUNIT) += regmap-kunit.o
 obj-$(CONFIG_REGMAP_AC97) += regmap-ac97.o
 obj-$(CONFIG_REGMAP_I2C) += regmap-i2c.o
+obj-$(CONFIG_REGMAP_RAM) += regmap-ram.o regmap-raw-ram.o
 obj-$(CONFIG_REGMAP_SLIMBUS) += regmap-slimbus.o
 obj-$(CONFIG_REGMAP_SPI) += regmap-spi.o
 obj-$(CONFIG_REGMAP_SPMI) += regmap-spmi.o
@@ -24,3 +23,4 @@ obj-$(CONFIG_REGMAP_SCCB) += regmap-sccb.o
 obj-$(CONFIG_REGMAP_I3C) += regmap-i3c.o
 obj-$(CONFIG_REGMAP_SPI_AVMM) += regmap-spi-avmm.o
 obj-$(CONFIG_REGMAP_MDIO) += regmap-mdio.o
+obj-$(CONFIG_REGMAP_FSI) += regmap-fsi.o

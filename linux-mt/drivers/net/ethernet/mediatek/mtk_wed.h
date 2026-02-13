@@ -16,13 +16,17 @@ struct mtk_wed_wo;
 
 struct mtk_wed_soc_data {
 	struct {
+		u32 wed_rev_id;
 		u32 tx_bm_tkid;
 		u32 wpdma_rx_ring0;
+		u32 wpdma_rx_ring1;
 		u32 reset_idx_tx_mask;
 		u32 reset_idx_rx_mask;
+		u32 msdu_pg_ring2_cfg;
 	} regmap;
 	u32 tx_ring_desc_size;
 	u32 wdma_desc_size;
+	u8 wo_support;
 };
 
 struct mtk_wed_amsdu {
@@ -59,27 +63,33 @@ struct mtk_wdma_info {
 	u16 wcid;
 	u8 bss;
 	u8 amsdu;
+	u8 tid;
 };
 
 #ifdef CONFIG_NET_MEDIATEK_SOC_WED
 static inline bool mtk_wed_is_v1(struct mtk_wed_hw *hw)
 {
-	return hw->version == 1;
+	return hw->version == MTK_WED_HW_V1;
 }
 
 static inline bool mtk_wed_is_v2(struct mtk_wed_hw *hw)
 {
-	return hw->version == 2;
+	return hw->version == MTK_WED_HW_V2;
 }
 
 static inline bool mtk_wed_is_v3(struct mtk_wed_hw *hw)
 {
-	return hw->version == 3;
+	return hw->version == MTK_WED_HW_V3;
 }
 
 static inline bool mtk_wed_is_v3_or_greater(struct mtk_wed_hw *hw)
 {
-	return hw->version > 2;
+	return hw->version > MTK_WED_HW_V2;
+}
+
+static inline bool mtk_wed_is_v3_1(struct mtk_wed_hw *hw)
+{
+	return hw->version == MTK_WED_HW_V3_1;
 }
 
 static inline void
@@ -166,7 +176,7 @@ wpdma_txfree_w32(struct mtk_wed_device *dev, u32 reg, u32 val)
 
 static inline u32 mtk_wed_get_pcie_base(struct mtk_wed_device *dev)
 {
-	if (!mtk_wed_is_v3_or_greater(dev->hw))
+	if (!mtk_wed_is_v3(dev->hw))
 		return MTK_WED_PCIE_BASE;
 
 	switch (dev->hw->index) {

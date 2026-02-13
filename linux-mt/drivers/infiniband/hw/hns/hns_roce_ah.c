@@ -33,7 +33,6 @@
 #include <linux/pci.h>
 #include <rdma/ib_addr.h>
 #include <rdma/ib_cache.h>
-#include "hnae3.h"
 #include "hns_roce_device.h"
 #include "hns_roce_hw_v2.h"
 
@@ -43,9 +42,8 @@ static inline u16 get_ah_udp_sport(const struct rdma_ah_attr *ah_attr)
 	u16 sport;
 
 	if (!fl)
-		sport = prandom_u32_max(IB_ROCE_UDP_ENCAP_VALID_PORT_MAX + 1 -
-					IB_ROCE_UDP_ENCAP_VALID_PORT_MIN) +
-			IB_ROCE_UDP_ENCAP_VALID_PORT_MIN;
+		sport = get_random_u32_inclusive(IB_ROCE_UDP_ENCAP_VALID_PORT_MIN,
+						 IB_ROCE_UDP_ENCAP_VALID_PORT_MAX);
 	else
 		sport = rdma_flow_label_to_udp_sport(fl);
 

@@ -95,17 +95,8 @@ static struct sk_buff *codel_qdisc_dequeue(struct Qdisc *sch)
 			    &q->stats, qdisc_pkt_len, codel_get_enqueue_time,
 			    drop_func, dequeue_func);
 
-	/* If our qlen is 0 qdisc_tree_reduce_backlog() will deactivate
-	 * parent class, dequeue in parent qdisc will do the same if we
-	 * return skb. Temporary increment qlen if we have skb.
-	 */
 	if (q->stats.drop_count) {
-		if (skb)
-			sch->q.qlen++;
-		qdisc_tree_reduce_backlog(sch, q->stats.drop_count,
-					  q->stats.drop_len);
-		if (skb)
-			sch->q.qlen--;
+		qdisc_tree_reduce_backlog(sch, q->stats.drop_count, q->stats.drop_len);
 		q->stats.drop_count = 0;
 		q->stats.drop_len = 0;
 	}
@@ -177,7 +168,7 @@ static int codel_change(struct Qdisc *sch, struct nlattr *opt,
 
 	qlen = sch->q.qlen;
 	while (sch->q.qlen > sch->limit) {
-		struct sk_buff *skb = __qdisc_dequeue_head(&sch->q);
+		struct sk_buff *skb = qdisc_dequeue_internal(sch, true);
 
 		dropped += qdisc_pkt_len(skb);
 		qdisc_qstats_backlog_dec(sch, skb);

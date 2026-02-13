@@ -42,6 +42,7 @@
 #define B_AX_DBI_WFLAG			BIT(16)
 #define B_AX_DBI_WREN_MSK		GENMASK(15, 12)
 #define B_AX_DBI_ADDR_MSK		GENMASK(11, 2)
+#define B_AX_DBI_2LSB			GENMASK(1, 0)
 #define R_AX_DBI_WDATA			0x1094
 #define R_AX_DBI_RDATA			0x1098
 
@@ -150,6 +151,7 @@
 #define B_AX_HD1ISR_IND_INT_EN		BIT(26)
 #define B_AX_HD0ISR_IND_INT_EN		BIT(25)
 #define B_AX_HS0ISR_IND_INT_EN		BIT(24)
+#define B_AX_HS0ISR_IND_INT_EN_WKARND	BIT(23)
 #define B_AX_RETRAIN_INT_EN		BIT(21)
 #define B_AX_RPQBD_FULL_INT_EN		BIT(20)
 #define B_AX_RDU_INT_EN			BIT(19)
@@ -201,6 +203,18 @@
 #define B_AX_RPQDMA_INT			BIT(2)
 #define B_AX_RXP1DMA_INT		BIT(1)
 #define B_AX_RXDMA_INT			BIT(0)
+
+#define R_AX_HAXI_IDCT_MSK 0x10B8
+#define B_AX_TXBD_LEN0_ERR_IDCT_MSK BIT(3)
+#define B_AX_TXBD_4KBOUND_ERR_IDCT_MSK BIT(2)
+#define B_AX_RXMDA_STUCK_IDCT_MSK BIT(1)
+#define B_AX_TXMDA_STUCK_IDCT_MSK BIT(0)
+
+#define R_AX_HAXI_IDCT 0x10BC
+#define B_AX_TXBD_LEN0_ERR_IDCT BIT(3)
+#define B_AX_TXBD_4KBOUND_ERR_IDCT BIT(2)
+#define B_AX_RXMDA_STUCK_IDCT BIT(1)
+#define B_AX_TXMDA_STUCK_IDCT BIT(0)
 
 #define R_AX_HAXI_HIMR10 0x11E0
 #define B_AX_TXDMA_CH11_INT_EN_V1 BIT(1)
@@ -546,7 +560,7 @@
 #define RTW89_PCI_TXWD_NUM_MAX		512
 #define RTW89_PCI_TXWD_PAGE_SIZE	128
 #define RTW89_PCI_ADDRINFO_MAX		4
-#define RTW89_PCI_RX_BUF_SIZE		11460
+#define RTW89_PCI_RX_BUF_SIZE		(11454 + 40) /* +40 for rtw89_rxdesc_long_v2 */
 
 #define RTW89_PCI_POLL_BDRAM_RST_CNT	100
 #define RTW89_PCI_MULTITAG		8
@@ -738,6 +752,12 @@ struct rtw89_pci_ch_dma_addr_set {
 	struct rtw89_pci_ch_dma_addr rx[RTW89_RXCH_NUM];
 };
 
+struct rtw89_pci_bd_ram {
+	u8 start_idx;
+	u8 max_num;
+	u8 min_num;
+};
+
 struct rtw89_pci_info {
 	enum mac_ax_bd_trunc_mode txbd_trunc_mode;
 	enum mac_ax_bd_trunc_mode rxbd_trunc_mode;
@@ -773,6 +793,7 @@ struct rtw89_pci_info {
 	u32 tx_dma_ch_mask;
 	const struct rtw89_pci_bd_idx_addr *bd_idx_addr_low_power;
 	const struct rtw89_pci_ch_dma_addr_set *dma_addr_set;
+	const struct rtw89_pci_bd_ram (*bd_ram_table)[RTW89_TXCH_NUM];
 
 	int (*ltr_set)(struct rtw89_dev *rtwdev, bool en);
 	u32 (*fill_txaddr_info)(struct rtw89_dev *rtwdev,
@@ -784,12 +805,6 @@ struct rtw89_pci_info {
 	void (*recognize_intrs)(struct rtw89_dev *rtwdev,
 				struct rtw89_pci *rtwpci,
 				struct rtw89_pci_isrs *isrs);
-};
-
-struct rtw89_pci_bd_ram {
-	u8 start_idx;
-	u8 max_num;
-	u8 min_num;
 };
 
 struct rtw89_pci_tx_data {
@@ -991,9 +1006,9 @@ rtw89_pci_rxbd_increase(struct rtw89_pci_rx_ring *rx_ring, u32 cnt)
 
 static inline struct rtw89_pci_tx_data *RTW89_PCI_TX_SKB_CB(struct sk_buff *skb)
 {
-	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
+	struct rtw89_tx_skb_data *data = RTW89_TX_SKB_CB(skb);
 
-	return (struct rtw89_pci_tx_data *)info->status.status_driver_data;
+	return (struct rtw89_pci_tx_data *)data->hci_priv;
 }
 
 static inline struct rtw89_pci_tx_bd_32 *
@@ -1045,6 +1060,8 @@ static inline bool rtw89_pci_ltr_is_err_reg_val(u32 val)
 extern const struct dev_pm_ops rtw89_pm_ops;
 extern const struct rtw89_pci_ch_dma_addr_set rtw89_pci_ch_dma_addr_set;
 extern const struct rtw89_pci_ch_dma_addr_set rtw89_pci_ch_dma_addr_set_v1;
+extern const struct rtw89_pci_bd_ram rtw89_bd_ram_table_dual[RTW89_TXCH_NUM];
+extern const struct rtw89_pci_bd_ram rtw89_bd_ram_table_single[RTW89_TXCH_NUM];
 
 struct pci_device_id;
 

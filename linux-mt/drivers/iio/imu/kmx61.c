@@ -649,7 +649,7 @@ static int kmx61_chip_update_thresholds(struct kmx61_data *data)
 					KMX61_REG_WUF_TIMER,
 					data->wake_duration);
 	if (ret < 0) {
-		dev_err(&data->client->dev, "Errow writing reg_wuf_timer\n");
+		dev_err(&data->client->dev, "Error writing reg_wuf_timer\n");
 		return ret;
 	}
 
@@ -1192,7 +1192,7 @@ static irqreturn_t kmx61_trigger_handler(int irq, void *p)
 	struct kmx61_data *data = kmx61_get_data(indio_dev);
 	int bit, ret, i = 0;
 	u8 base;
-	s16 buffer[8];
+	s16 buffer[8] = { };
 
 	if (indio_dev == data->acc_indio_dev)
 		base = KMX61_ACC_XOUT_L;
@@ -1276,9 +1276,9 @@ static struct iio_trigger *kmx61_trigger_setup(struct kmx61_data *data,
 	return trig;
 }
 
-static int kmx61_probe(struct i2c_client *client,
-		       const struct i2c_device_id *id)
+static int kmx61_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	int ret;
 	struct kmx61_data *data;
 	const char *name = NULL;

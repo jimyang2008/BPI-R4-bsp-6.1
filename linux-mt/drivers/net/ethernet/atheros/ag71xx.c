@@ -29,9 +29,10 @@
 
 #include <linux/if_vlan.h>
 #include <linux/mfd/syscon.h>
+#include <linux/of.h>
 #include <linux/of_mdio.h>
 #include <linux/of_net.h>
-#include <linux/of_platform.h>
+#include <linux/platform_device.h>
 #include <linux/phylink.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
@@ -637,7 +638,8 @@ static int ag71xx_mdio_get_divider(struct ag71xx *ag, u32 *div)
 	if (!ref_clock)
 		return -EINVAL;
 
-	if (ag71xx_is(ag, AR9330) || ag71xx_is(ag, AR9340)) {
+	if (ag71xx_is(ag, AR9330) || ag71xx_is(ag, AR9340) ||
+	    ag71xx_is(ag, QCA9530) || ag71xx_is(ag, QCA9550)) {
 		table = ar933x_mdio_div_table;
 		ndivs = ARRAY_SIZE(ar933x_mdio_div_table);
 	} else if (ag71xx_is(ag, AR7240)) {
@@ -1086,7 +1088,6 @@ static void ag71xx_mac_link_up(struct phylink_config *config,
 }
 
 static const struct phylink_mac_ops ag71xx_phylink_mac_ops = {
-	.validate = phylink_generic_validate,
 	.mac_config = ag71xx_mac_config,
 	.mac_link_down = ag71xx_mac_link_down,
 	.mac_link_up = ag71xx_mac_link_up,
@@ -1234,6 +1235,11 @@ static bool ag71xx_fill_rx_buf(struct ag71xx *ag, struct ag71xx_buf *buf,
 	buf->rx.rx_buf = data;
 	buf->rx.dma_addr = dma_map_single(&ag->pdev->dev, data, ag->rx_buf_size,
 					  DMA_FROM_DEVICE);
+	if (dma_mapping_error(&ag->pdev->dev, buf->rx.dma_addr)) {
+		skb_free_frag(data);
+		buf->rx.rx_buf = NULL;
+		return false;
+	}
 	desc->data = (u32)buf->rx.dma_addr + offset;
 	return true;
 }
@@ -1532,6 +1538,10 @@ static netdev_tx_t ag71xx_hard_start_xmit(struct sk_buff *skb,
 
 	dma_addr = dma_map_single(&ag->pdev->dev, skb->data, skb->len,
 				  DMA_TO_DEVICE);
+	if (dma_mapping_error(&ag->pdev->dev, dma_addr)) {
+		netif_dbg(ag, tx_err, ndev, "DMA mapping error\n");
+		goto err_drop;
+	}
 
 	i = ring->curr & ring_mask;
 	desc = ag71xx_ring_desc(ring, i);

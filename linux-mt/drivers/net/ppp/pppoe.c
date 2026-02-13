@@ -73,6 +73,11 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 
+#if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+#include <linux/netfilter.h>
+#include <net/netfilter/nf_flow_table.h>
+#endif
+
 #include <linux/nsproxy.h>
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
@@ -80,7 +85,7 @@
 
 #include <linux/uaccess.h>
 
-#define PPPOE_HASH_BITS 4
+#define PPPOE_HASH_BITS CONFIG_PPPOE_HASH_BITS
 #define PPPOE_HASH_SIZE (1 << PPPOE_HASH_BITS)
 #define PPPOE_HASH_MASK	(PPPOE_HASH_SIZE - 1)
 
@@ -968,7 +973,7 @@ abort:
  ***********************************************************************/
 static int pppoe_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 {
-	struct sock *sk = (struct sock *)chan->private;
+	struct sock *sk = chan->private;
 	return __pppoe_xmit(sk, skb);
 }
 
@@ -976,7 +981,7 @@ static int pppoe_fill_forward_path(struct net_device_path_ctx *ctx,
 				   struct net_device_path *path,
 				   const struct ppp_channel *chan)
 {
-	struct sock *sk = (struct sock *)chan->private;
+	struct sock *sk = chan->private;
 	struct pppox_sock *po = pppox_sk(sk);
 	struct net_device *dev = po->pppoe_dev;
 
@@ -995,8 +1000,36 @@ static int pppoe_fill_forward_path(struct net_device_path_ctx *ctx,
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+static int pppoe_flow_offload_check(struct ppp_channel *chan,
+				    struct flow_offload_hw_path *path)
+{
+	struct sock *sk = (struct sock *)chan->private;
+	struct pppox_sock *po = pppox_sk(sk);
+	struct net_device *dev = po->pppoe_dev;
+
+	if (sock_flag(sk, SOCK_DEAD) ||
+	    !(sk->sk_state & PPPOX_CONNECTED) || !dev)
+		return -ENODEV;
+
+	path->dev = po->pppoe_dev;
+	path->flags |= DEV_PATH_PPPOE;
+	memcpy(path->eth_src, po->pppoe_dev->dev_addr, ETH_ALEN);
+	memcpy(path->eth_dest, po->pppoe_pa.remote, ETH_ALEN);
+	path->pppoe_sid = be16_to_cpu(po->num);
+
+	if (path->dev->netdev_ops->ndo_flow_offload_check)
+		return path->dev->netdev_ops->ndo_flow_offload_check(path);
+
+	return 0;
+}
+#endif /* CONFIG_NF_FLOW_TABLE */
+
 static const struct ppp_channel_ops pppoe_chan_ops = {
 	.start_xmit = pppoe_xmit,
+#if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+	.flow_offload_check = pppoe_flow_offload_check,
+#endif
 	.fill_forward_path = pppoe_fill_forward_path,
 };
 
@@ -1007,26 +1040,21 @@ static int pppoe_recvmsg(struct socket *sock, struct msghdr *m,
 	struct sk_buff *skb;
 	int error = 0;
 
-	if (sk->sk_state & PPPOX_BOUND) {
-		error = -EIO;
-		goto end;
-	}
+	if (sk->sk_state & PPPOX_BOUND)
+		return -EIO;
 
 	skb = skb_recv_datagram(sk, flags, &error);
-	if (error < 0)
-		goto end;
+	if (!skb)
+		return error;
 
-	if (skb) {
-		total_len = min_t(size_t, total_len, skb->len);
-		error = skb_copy_datagram_msg(skb, 0, m, total_len);
-		if (error == 0) {
-			consume_skb(skb);
-			return total_len;
-		}
+	total_len = min_t(size_t, total_len, skb->len);
+	error = skb_copy_datagram_msg(skb, 0, m, total_len);
+	if (error == 0) {
+		consume_skb(skb);
+		return total_len;
 	}
 
 	kfree_skb(skb);
-end:
 	return error;
 }
 

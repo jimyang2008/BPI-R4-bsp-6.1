@@ -8,7 +8,9 @@
 #include <linux/etherdevice.h>
 #include <linux/if_vlan.h>
 
-#include "dsa_priv.h"
+#include "tag.h"
+
+#define MTK_NAME		"mtk"
 
 #define MTK_HDR_LEN		4
 #define MTK_HDR_XMIT_UNTAGGED		0
@@ -100,7 +102,7 @@ static struct sk_buff *mtk_tag_rcv(struct sk_buff *skb, struct net_device *dev)
 }
 
 static const struct dsa_device_ops mtk_netdev_ops = {
-	.name		= "mtk",
+	.name		= MTK_NAME,
 	.proto		= DSA_TAG_PROTO_MTK,
 	.xmit		= mtk_tag_xmit,
 	.rcv		= mtk_tag_rcv,
@@ -108,6 +110,6 @@ static const struct dsa_device_ops mtk_netdev_ops = {
 };
 
 MODULE_LICENSE("GPL");
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_MTK);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_MTK, MTK_NAME);
 
 module_dsa_tag_driver(mtk_netdev_ops);

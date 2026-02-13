@@ -28,8 +28,13 @@
 DEFINE_IDR(dev_nums_idr);
 static DEFINE_MUTEX(idr_lock);
 
-struct class *tpm_class;
-struct class *tpmrm_class;
+const struct class tpm_class = {
+	.name = "tpm",
+	.shutdown_pre = tpm_class_shutdown,
+};
+const struct class tpmrm_class = {
+	.name = "tpmrm",
+};
 dev_t tpm_devt;
 
 static int tpm_request_locality(struct tpm_chip *chip)
@@ -160,6 +165,11 @@ int tpm_try_get_ops(struct tpm_chip *chip)
 		goto out_ops;
 
 	mutex_lock(&chip->tpm_mutex);
+
+	/* tmp_chip_start may issue IO that is denied while suspended */
+	if (chip->flags & TPM_CHIP_FLAG_SUSPENDED)
+		goto out_lock;
+
 	rc = tpm_chip_start(chip);
 	if (rc)
 		goto out_lock;
@@ -267,7 +277,6 @@ static void tpm_dev_release(struct device *dev)
 	idr_remove(&dev_nums_idr, chip->dev_num);
 	mutex_unlock(&idr_lock);
 
-	kfree(chip->log.bios_event_log);
 	kfree(chip->work_space.context_buf);
 	kfree(chip->work_space.session_buf);
 	kfree(chip->allocated_banks);
@@ -283,7 +292,7 @@ static void tpm_dev_release(struct device *dev)
  *
  * Return: always 0 (i.e. success)
  */
-static int tpm_class_shutdown(struct device *dev)
+int tpm_class_shutdown(struct device *dev)
 {
 	struct tpm_chip *chip = container_of(dev, struct tpm_chip, dev);
 
@@ -337,8 +346,7 @@ struct tpm_chip *tpm_chip_alloc(struct device *pdev,
 
 	device_initialize(&chip->dev);
 
-	chip->dev.class = tpm_class;
-	chip->dev.class->shutdown_pre = tpm_class_shutdown;
+	chip->dev.class = &tpm_class;
 	chip->dev.release = tpm_dev_release;
 	chip->dev.parent = pdev;
 	chip->dev.groups = chip->groups;
@@ -373,6 +381,11 @@ out:
 }
 EXPORT_SYMBOL_GPL(tpm_chip_alloc);
 
+static void tpm_put_device(void *dev)
+{
+	put_device(dev);
+}
+
 /**
  * tpmm_chip_alloc() - allocate a new struct tpm_chip instance
  * @pdev: parent device to which the chip is associated
@@ -391,7 +404,7 @@ struct tpm_chip *tpmm_chip_alloc(struct device *pdev,
 		return chip;
 
 	rc = devm_add_action_or_reset(pdev,
-				      (void (*)(void *)) put_device,
+				      tpm_put_device,
 				      &chip->dev);
 	if (rc)
 		return ERR_PTR(rc);
@@ -510,10 +523,6 @@ static int tpm_add_legacy_sysfs(struct tpm_chip *chip)
 static int tpm_hwrng_read(struct hwrng *rng, void *data, size_t max, bool wait)
 {
 	struct tpm_chip *chip = container_of(rng, struct tpm_chip, hwrng);
-
-	/* Give back zero bytes, as TPM chip has not yet fully resumed: */
-	if (chip->flags & TPM_CHIP_FLAG_SUSPENDED)
-		return 0;
 
 	return tpm_get_random(chip, data, max);
 }

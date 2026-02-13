@@ -7,10 +7,9 @@
 
 #include <linux/kernel.h>
 #include <linux/dma-mapping.h>
-#include <linux/of_platform.h>
 #include <linux/interrupt.h>
-#include <linux/of_address.h>
 #include <linux/mfd/syscon.h>
+#include <linux/of.h>
 #include <linux/of_irq.h>
 #include <linux/bitfield.h>
 
@@ -143,7 +142,8 @@ mtk_wed_wo_queue_refill(struct mtk_wed_wo *wo, struct mtk_wed_wo_queue *q,
 		dma_addr_t addr;
 		void *buf;
 
-		buf = page_frag_alloc(&q->cache, q->buf_size, GFP_ATOMIC);
+		buf = page_frag_alloc(&q->cache, q->buf_size,
+				      GFP_ATOMIC | GFP_DMA32);
 		if (!buf)
 			break;
 
@@ -292,6 +292,9 @@ mtk_wed_wo_queue_tx_clean(struct mtk_wed_wo *wo, struct mtk_wed_wo_queue *q)
 	for (i = 0; i < q->n_desc; i++) {
 		struct mtk_wed_wo_queue_entry *entry = &q->entry[i];
 
+		if (!entry->buf)
+			continue;
+
 		dma_unmap_single(wo->hw->dev, entry->addr, entry->len,
 				 DMA_TO_DEVICE);
 		skb_free_frag(entry->buf);
@@ -397,8 +400,10 @@ mtk_wed_wo_hardware_init(struct mtk_wed_wo *wo)
 		return -ENODEV;
 
 	wo->mmio.regs = syscon_regmap_lookup_by_phandle(np, NULL);
-	if (IS_ERR_OR_NULL(wo->mmio.regs))
-		return PTR_ERR(wo->mmio.regs);
+	if (IS_ERR(wo->mmio.regs)) {
+		ret = PTR_ERR(wo->mmio.regs);
+		goto error_put;
+	}
 
 	wo->mmio.irq = irq_of_parse_and_map(np, 0);
 	wo->mmio.irq_mask = MTK_WED_WO_ALL_INT_MASK;
@@ -446,7 +451,8 @@ mtk_wed_wo_hardware_init(struct mtk_wed_wo *wo)
 
 error:
 	devm_free_irq(wo->hw->dev, wo->mmio.irq, wo);
-
+error_put:
+	of_node_put(np);
 	return ret;
 }
 
@@ -472,6 +478,9 @@ int mtk_wed_wo_init(struct mtk_wed_hw *hw)
 	struct mtk_wed_wo *wo;
 	int ret;
 
+	if (!hw->soc->wo_support)
+		return 0;
+
 	wo = devm_kzalloc(hw->dev, sizeof(*wo), GFP_KERNEL);
 	if (!wo)
 		return -ENOMEM;
@@ -493,6 +502,9 @@ int mtk_wed_wo_init(struct mtk_wed_hw *hw)
 void mtk_wed_wo_deinit(struct mtk_wed_hw *hw)
 {
 	struct mtk_wed_wo *wo = hw->wed_wo;
+
+	if(!hw->soc->wo_support || !wo)
+		return;
 
 	mtk_wed_wo_hw_deinit(wo);
 }

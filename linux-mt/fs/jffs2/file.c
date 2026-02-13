@@ -53,12 +53,12 @@ const struct file_operations jffs2_file_operations =
 	.open =		generic_file_open,
  	.read_iter =	generic_file_read_iter,
  	.write_iter =	generic_file_write_iter,
-	.splice_read =	generic_file_splice_read,
+	.splice_read =	filemap_splice_read,
 	.splice_write =	iter_file_splice_write,
 	.unlocked_ioctl=jffs2_ioctl,
 	.mmap =		generic_file_readonly_mmap,
 	.fsync =	jffs2_fsync,
-	.splice_read =	generic_file_splice_read,
+	.splice_read =	filemap_splice_read,
 	.splice_write = iter_file_splice_write,
 };
 
@@ -66,7 +66,7 @@ const struct file_operations jffs2_file_operations =
 
 const struct inode_operations jffs2_file_inode_operations =
 {
-	.get_acl =	jffs2_get_acl,
+	.get_inode_acl =	jffs2_get_acl,
 	.set_acl =	jffs2_set_acl,
 	.setattr =	jffs2_setattr,
 	.listxattr =	jffs2_listxattr,
@@ -319,7 +319,8 @@ static int jffs2_write_end(struct file *filp, struct address_space *mapping,
 			inode->i_size = pos + writtenlen;
 			inode->i_blocks = (inode->i_size + 511) >> 9;
 
-			inode->i_ctime = inode->i_mtime = ITIME(je32_to_cpu(ri->ctime));
+			inode->i_mtime = inode_set_ctime_to_ts(inode,
+							       ITIME(je32_to_cpu(ri->ctime)));
 		}
 	}
 

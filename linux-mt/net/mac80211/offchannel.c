@@ -8,7 +8,7 @@
  * Copyright 2006-2007	Jiri Benc <jbenc@suse.cz>
  * Copyright 2007, Michael Wu <flamingice@sourmilk.net>
  * Copyright 2009	Johannes Berg <johannes@sipsolutions.net>
- * Copyright (C) 2019, 2022 Intel Corporation
+ * Copyright (C) 2019, 2022-2023 Intel Corporation
  */
 #include <linux/export.h>
 #include <net/mac80211.h>
@@ -940,6 +940,7 @@ int ieee80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 	}
 
 	IEEE80211_SKB_CB(skb)->flags = flags;
+	IEEE80211_SKB_CB(skb)->control.flags |= IEEE80211_TX_CTRL_DONT_USE_RATE_MASK;
 
 	skb->dev = sdata->dev;
 
@@ -1014,7 +1015,7 @@ void ieee80211_roc_purge(struct ieee80211_local *local,
 		if (roc->started) {
 			if (local->ops->remain_on_channel) {
 				/* can race, so ignore return value */
-				drv_cancel_remain_on_channel(local, sdata);
+				drv_cancel_remain_on_channel(local, roc->sdata);
 				ieee80211_roc_notify_destroy(roc);
 			} else {
 				roc->abort = true;

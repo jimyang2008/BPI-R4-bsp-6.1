@@ -434,7 +434,10 @@ static intel_wakeref_t __intel_runtime_pm_get_if_active(struct intel_runtime_pm 
 		 * function, since the power state is undefined. This applies
 		 * atm to the late/early system suspend/resume handlers.
 		 */
-		if (pm_runtime_get_if_active(rpm->kdev, ignore_usecount) <= 0)
+		if ((ignore_usecount &&
+		     pm_runtime_get_if_active(rpm->kdev) <= 0) ||
+		    (!ignore_usecount &&
+		     pm_runtime_get_if_in_use(rpm->kdev) <= 0))
 			return 0;
 	}
 
@@ -652,9 +655,11 @@ void intel_runtime_pm_init_early(struct intel_runtime_pm *rpm)
 
 	rpm->kdev = kdev;
 	rpm->available = HAS_RUNTIME_PM(i915);
+	rpm->suspended = false;
+	atomic_set(&rpm->wakeref_count, 0);
 
 	init_intel_runtime_pm_wakeref(rpm);
 	INIT_LIST_HEAD(&rpm->lmem_userfault_list);
 	spin_lock_init(&rpm->lmem_userfault_lock);
-	intel_wakeref_auto_init(&rpm->userfault_wakeref, rpm);
+	intel_wakeref_auto_init(&rpm->userfault_wakeref, i915);
 }

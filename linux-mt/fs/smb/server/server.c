@@ -167,19 +167,16 @@ static void __handle_ksmbd_work(struct ksmbd_work *work,
 	int rc;
 	bool is_chained = false;
 
-	if (conn->ops->allocate_rsp_buf(work))
-		return;
-
 	if (conn->ops->is_transform_hdr &&
 	    conn->ops->is_transform_hdr(work->request_buf)) {
 		rc = conn->ops->decrypt_req(work);
-		if (rc < 0) {
-			conn->ops->set_rsp_status(work, STATUS_DATA_ERROR);
-			goto send;
-		}
-
+		if (rc < 0)
+			return;
 		work->encrypted = true;
 	}
+
+	if (conn->ops->allocate_rsp_buf(work))
+		return;
 
 	rc = conn->ops->init_rsp_hdr(work);
 	if (rc) {
@@ -250,6 +247,8 @@ send:
 		if (rc < 0)
 			conn->ops->set_rsp_status(work, STATUS_DATA_ERROR);
 	}
+	if (work->sess)
+		ksmbd_user_session_put(work->sess);
 
 	ksmbd_conn_write(work);
 }
@@ -271,13 +270,7 @@ static void handle_ksmbd_work(struct work_struct *wk)
 
 	ksmbd_conn_try_dequeue_request(work);
 	ksmbd_free_work_struct(work);
-	/*
-	 * Checking waitqueue to dropping pending requests on
-	 * disconnection. waitqueue_active is safe because it
-	 * uses atomic operation for condition.
-	 */
-	if (!atomic_dec_return(&conn->r_count) && waitqueue_active(&conn->r_count_q))
-		wake_up(&conn->r_count_q);
+	ksmbd_conn_r_count_dec(conn);
 }
 
 /**
@@ -292,6 +285,10 @@ static int queue_ksmbd_work(struct ksmbd_conn *conn)
 	struct ksmbd_work *work;
 	int err;
 
+	err = ksmbd_init_smb_server(conn);
+	if (err)
+		return 0;
+
 	work = ksmbd_alloc_work_struct();
 	if (!work) {
 		pr_err("allocation for work failed\n");
@@ -302,14 +299,8 @@ static int queue_ksmbd_work(struct ksmbd_conn *conn)
 	work->request_buf = conn->request_buf;
 	conn->request_buf = NULL;
 
-	err = ksmbd_init_smb_server(work);
-	if (err) {
-		ksmbd_free_work_struct(work);
-		return 0;
-	}
-
 	ksmbd_conn_enqueue_request(work);
-	atomic_inc(&conn->r_count);
+	ksmbd_conn_r_count_inc(conn);
 	/* update activity on connection */
 	conn->last_active = jiffies;
 	INIT_WORK(&work->work, handle_ksmbd_work);
@@ -360,6 +351,7 @@ static int server_conf_init(void)
 	server_conf.auth_mechs |= KSMBD_AUTH_KRB5 |
 				KSMBD_AUTH_MSKRB5;
 #endif
+	server_conf.max_inflight_req = SMB2_MAX_CREDITS;
 	return 0;
 }
 
@@ -432,7 +424,7 @@ int server_queue_ctrl_reset_work(void)
 	return __queue_ctrl_work(SERVER_CTRL_TYPE_RESET);
 }
 
-static ssize_t stats_show(struct class *class, struct class_attribute *attr,
+static ssize_t stats_show(const struct class *class, const struct class_attribute *attr,
 			  char *buf)
 {
 	/*
@@ -451,8 +443,8 @@ static ssize_t stats_show(struct class *class, struct class_attribute *attr,
 			  server_conf.ipc_last_active / HZ);
 }
 
-static ssize_t kill_server_store(struct class *class,
-				 struct class_attribute *attr, const char *buf,
+static ssize_t kill_server_store(const struct class *class,
+				 const struct class_attribute *attr, const char *buf,
 				 size_t len)
 {
 	if (!sysfs_streq(buf, "hard"))
@@ -472,7 +464,7 @@ static const char * const debug_type_strings[] = {"smb", "auth", "vfs",
 						  "oplock", "ipc", "conn",
 						  "rdma"};
 
-static ssize_t debug_show(struct class *class, struct class_attribute *attr,
+static ssize_t debug_show(const struct class *class, const struct class_attribute *attr,
 			  char *buf)
 {
 	ssize_t sz = 0;
@@ -490,7 +482,7 @@ static ssize_t debug_show(struct class *class, struct class_attribute *attr,
 	return sz;
 }
 
-static ssize_t debug_store(struct class *class, struct class_attribute *attr,
+static ssize_t debug_store(const struct class *class, const struct class_attribute *attr,
 			   const char *buf, size_t len)
 {
 	int i;
@@ -530,7 +522,6 @@ ATTRIBUTE_GROUPS(ksmbd_control_class);
 
 static struct class ksmbd_control_class = {
 	.name		= "ksmbd-control",
-	.owner		= THIS_MODULE,
 	.class_groups	= ksmbd_control_class_groups,
 };
 

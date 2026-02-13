@@ -36,6 +36,7 @@
 #include <net/compat.h>
 #include <net/scm.h>
 #include <net/cls_cgroup.h>
+#include <net/af_unix.h>
 
 
 /*
@@ -85,8 +86,15 @@ static int scm_fp_copy(struct cmsghdr *cmsg, struct scm_fp_list **fplp)
 			return -ENOMEM;
 		*fplp = fpl;
 		fpl->count = 0;
+		fpl->count_unix = 0;
 		fpl->max = SCM_MAX_FD;
 		fpl->user = NULL;
+#if IS_ENABLED(CONFIG_UNIX)
+		fpl->inflight = false;
+		fpl->dead = false;
+		fpl->edges = NULL;
+		INIT_LIST_HEAD(&fpl->vertices);
+#endif
 	}
 	fpp = &fpl->fp[fpl->count];
 
@@ -105,10 +113,13 @@ static int scm_fp_copy(struct cmsghdr *cmsg, struct scm_fp_list **fplp)
 		if (fd < 0 || !(file = fget_raw(fd)))
 			return -EBADF;
 		/* don't allow io_uring files */
-		if (io_uring_get_socket(file)) {
+		if (io_is_uring_fops(file)) {
 			fput(file);
 			return -EINVAL;
 		}
+		if (unix_get_socket(file))
+			fpl->count_unix++;
+
 		*fpp++ = file;
 		fpl->count++;
 	}
@@ -136,6 +147,7 @@ EXPORT_SYMBOL(__scm_destroy);
 
 int __scm_send(struct socket *sock, struct msghdr *msg, struct scm_cookie *p)
 {
+	const struct proto_ops *ops = READ_ONCE(sock->ops);
 	struct cmsghdr *cmsg;
 	int err;
 
@@ -159,7 +171,7 @@ int __scm_send(struct socket *sock, struct msghdr *msg, struct scm_cookie *p)
 		switch (cmsg->cmsg_type)
 		{
 		case SCM_RIGHTS:
-			if (!sock->ops || sock->ops->family != PF_UNIX)
+			if (!ops || ops->family != PF_UNIX)
 				goto error;
 			err=scm_fp_copy(cmsg, &p->fp);
 			if (err<0)
@@ -256,7 +268,10 @@ int put_cmsg(struct msghdr * msg, int level, int type, int len, void *data)
 	}
 
 	cmlen = min(CMSG_SPACE(len), msg->msg_controllen);
-	msg->msg_control += cmlen;
+	if (msg->msg_control_is_user)
+		msg->msg_control_user += cmlen;
+	else
+		msg->msg_control += cmlen;
 	msg->msg_controllen -= cmlen;
 	return 0;
 
@@ -305,7 +320,7 @@ static int scm_max_fds(struct msghdr *msg)
 void scm_detach_fds(struct msghdr *msg, struct scm_cookie *scm)
 {
 	struct cmsghdr __user *cm =
-		(__force struct cmsghdr __user *)msg->msg_control;
+		(__force struct cmsghdr __user *)msg->msg_control_user;
 	unsigned int o_flags = (msg->msg_flags & MSG_CMSG_CLOEXEC) ? O_CLOEXEC : 0;
 	int fdmax = min_t(int, scm_max_fds(msg), scm->fp->count);
 	int __user *cmsg_data = CMSG_USER_DATA(cm);
@@ -338,7 +353,7 @@ void scm_detach_fds(struct msghdr *msg, struct scm_cookie *scm)
 			cmlen = CMSG_SPACE(i * sizeof(int));
 			if (msg->msg_controllen < cmlen)
 				cmlen = msg->msg_controllen;
-			msg->msg_control += cmlen;
+			msg->msg_control_user += cmlen;
 			msg->msg_controllen -= cmlen;
 		}
 	}
@@ -367,8 +382,14 @@ struct scm_fp_list *scm_fp_dup(struct scm_fp_list *fpl)
 	if (new_fpl) {
 		for (i = 0; i < fpl->count; i++)
 			get_file(fpl->fp[i]);
+
 		new_fpl->max = new_fpl->count;
 		new_fpl->user = get_uid(fpl->user);
+#if IS_ENABLED(CONFIG_UNIX)
+		new_fpl->inflight = false;
+		new_fpl->edges = NULL;
+		INIT_LIST_HEAD(&new_fpl->vertices);
+#endif
 	}
 	return new_fpl;
 }

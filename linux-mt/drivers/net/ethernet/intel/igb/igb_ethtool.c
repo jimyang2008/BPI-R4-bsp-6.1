@@ -2316,15 +2316,15 @@ static void igb_get_ethtool_stats(struct net_device *netdev,
 
 		ring = adapter->tx_ring[j];
 		do {
-			start = u64_stats_fetch_begin_irq(&ring->tx_syncp);
+			start = u64_stats_fetch_begin(&ring->tx_syncp);
 			data[i]   = ring->tx_stats.packets;
 			data[i+1] = ring->tx_stats.bytes;
 			data[i+2] = ring->tx_stats.restart_queue;
-		} while (u64_stats_fetch_retry_irq(&ring->tx_syncp, start));
+		} while (u64_stats_fetch_retry(&ring->tx_syncp, start));
 		do {
-			start = u64_stats_fetch_begin_irq(&ring->tx_syncp2);
+			start = u64_stats_fetch_begin(&ring->tx_syncp2);
 			restart2  = ring->tx_stats.restart_queue2;
-		} while (u64_stats_fetch_retry_irq(&ring->tx_syncp2, start));
+		} while (u64_stats_fetch_retry(&ring->tx_syncp2, start));
 		data[i+2] += restart2;
 
 		i += IGB_TX_QUEUE_STATS_LEN;
@@ -2332,13 +2332,13 @@ static void igb_get_ethtool_stats(struct net_device *netdev,
 	for (j = 0; j < adapter->num_rx_queues; j++) {
 		ring = adapter->rx_ring[j];
 		do {
-			start = u64_stats_fetch_begin_irq(&ring->rx_syncp);
+			start = u64_stats_fetch_begin(&ring->rx_syncp);
 			data[i]   = ring->rx_stats.packets;
 			data[i+1] = ring->rx_stats.bytes;
 			data[i+2] = ring->rx_stats.drops;
 			data[i+3] = ring->rx_stats.csum_err;
 			data[i+4] = ring->rx_stats.alloc_failed;
-		} while (u64_stats_fetch_retry_irq(&ring->rx_syncp, start));
+		} while (u64_stats_fetch_retry(&ring->rx_syncp, start));
 		i += IGB_RX_QUEUE_STATS_LEN;
 	}
 	spin_unlock(&adapter->stats64_lock);
@@ -2434,7 +2434,7 @@ static int igb_get_ts_info(struct net_device *dev,
 	}
 }
 
-#define ETHER_TYPE_FULL_MASK ((__force __be16)~0)
+#define ETHER_TYPE_FULL_MASK cpu_to_be16(FIELD_MAX(U16_MAX))
 static int igb_get_ethtool_nfc_entry(struct igb_adapter *adapter,
 				     struct ethtool_rxnfc *cmd)
 {
@@ -2733,8 +2733,8 @@ static int igb_rxnfc_write_vlan_prio_filter(struct igb_adapter *adapter,
 	u32 vlapqf;
 
 	vlapqf = rd32(E1000_VLAPQF);
-	vlan_priority = (ntohs(input->filter.vlan_tci) & VLAN_PRIO_MASK)
-				>> VLAN_PRIO_SHIFT;
+	vlan_priority = FIELD_GET(VLAN_PRIO_MASK,
+				  ntohs(input->filter.vlan_tci));
 	queue_index = (vlapqf >> (vlan_priority * 4)) & E1000_VLAPQF_QUEUE_MASK;
 
 	/* check whether this vlan prio is already set */
@@ -2817,7 +2817,7 @@ static void igb_clear_vlan_prio_filter(struct igb_adapter *adapter,
 	u8 vlan_priority;
 	u32 vlapqf;
 
-	vlan_priority = (vlan_tci & VLAN_PRIO_MASK) >> VLAN_PRIO_SHIFT;
+	vlan_priority = FIELD_GET(VLAN_PRIO_MASK, vlan_tci);
 
 	vlapqf = rd32(E1000_VLAPQF);
 	vlapqf &= ~E1000_VLAPQF_P_VALID(vlan_priority);
@@ -3030,7 +3030,7 @@ static int igb_set_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd)
 	return ret;
 }
 
-static int igb_get_eee(struct net_device *netdev, struct ethtool_eee *edata)
+static int igb_get_eee(struct net_device *netdev, struct ethtool_keee *edata)
 {
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
@@ -3041,10 +3041,10 @@ static int igb_get_eee(struct net_device *netdev, struct ethtool_eee *edata)
 	    (hw->phy.media_type != e1000_media_type_copper))
 		return -EOPNOTSUPP;
 
-	edata->supported = (SUPPORTED_1000baseT_Full |
-			    SUPPORTED_100baseT_Full);
+	edata->supported_u32 = (SUPPORTED_1000baseT_Full |
+				SUPPORTED_100baseT_Full);
 	if (!hw->dev_spec._82575.eee_disable)
-		edata->advertised =
+		edata->advertised_u32 =
 			mmd_eee_adv_to_ethtool_adv_t(adapter->eee_advert);
 
 	/* The IPCNFG and EEER registers are not supported on I354. */
@@ -3071,7 +3071,7 @@ static int igb_get_eee(struct net_device *netdev, struct ethtool_eee *edata)
 		if (ret_val)
 			return -ENODATA;
 
-		edata->lp_advertised = mmd_eee_adv_to_ethtool_adv_t(phy_data);
+		edata->lp_advertised_u32 = mmd_eee_adv_to_ethtool_adv_t(phy_data);
 		break;
 	case e1000_i354:
 	case e1000_i210:
@@ -3082,7 +3082,7 @@ static int igb_get_eee(struct net_device *netdev, struct ethtool_eee *edata)
 		if (ret_val)
 			return -ENODATA;
 
-		edata->lp_advertised = mmd_eee_adv_to_ethtool_adv_t(phy_data);
+		edata->lp_advertised_u32 = mmd_eee_adv_to_ethtool_adv_t(phy_data);
 
 		break;
 	default:
@@ -3102,18 +3102,18 @@ static int igb_get_eee(struct net_device *netdev, struct ethtool_eee *edata)
 		edata->eee_enabled = false;
 		edata->eee_active = false;
 		edata->tx_lpi_enabled = false;
-		edata->advertised &= ~edata->advertised;
+		edata->advertised_u32 &= ~edata->advertised_u32;
 	}
 
 	return 0;
 }
 
 static int igb_set_eee(struct net_device *netdev,
-		       struct ethtool_eee *edata)
+		       struct ethtool_keee *edata)
 {
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
-	struct ethtool_eee eee_curr;
+	struct ethtool_keee eee_curr;
 	bool adv1g_eee = true, adv100m_eee = true;
 	s32 ret_val;
 
@@ -3121,7 +3121,7 @@ static int igb_set_eee(struct net_device *netdev,
 	    (hw->phy.media_type != e1000_media_type_copper))
 		return -EOPNOTSUPP;
 
-	memset(&eee_curr, 0, sizeof(struct ethtool_eee));
+	memset(&eee_curr, 0, sizeof(struct ethtool_keee));
 
 	ret_val = igb_get_eee(netdev, &eee_curr);
 	if (ret_val)
@@ -3141,14 +3141,14 @@ static int igb_set_eee(struct net_device *netdev,
 			return -EINVAL;
 		}
 
-		if (!edata->advertised || (edata->advertised &
+		if (!edata->advertised_u32 || (edata->advertised_u32 &
 		    ~(ADVERTISE_100_FULL | ADVERTISE_1000_FULL))) {
 			dev_err(&adapter->pdev->dev,
 				"EEE Advertisement supports only 100Tx and/or 100T full duplex\n");
 			return -EINVAL;
 		}
-		adv100m_eee = !!(edata->advertised & ADVERTISE_100_FULL);
-		adv1g_eee = !!(edata->advertised & ADVERTISE_1000_FULL);
+		adv100m_eee = !!(edata->advertised_u32 & ADVERTISE_100_FULL);
+		adv1g_eee = !!(edata->advertised_u32 & ADVERTISE_1000_FULL);
 
 	} else if (!edata->eee_enabled) {
 		dev_err(&adapter->pdev->dev,
@@ -3156,7 +3156,7 @@ static int igb_set_eee(struct net_device *netdev,
 		return -EINVAL;
 	}
 
-	adapter->eee_advert = ethtool_adv_to_mmd_eee_adv_t(edata->advertised);
+	adapter->eee_advert = ethtool_adv_to_mmd_eee_adv_t(edata->advertised_u32);
 	if (hw->dev_spec._82575.eee_disable != !edata->eee_enabled) {
 		hw->dev_spec._82575.eee_disable = !edata->eee_enabled;
 		adapter->flags |= IGB_FLAG_EEE;

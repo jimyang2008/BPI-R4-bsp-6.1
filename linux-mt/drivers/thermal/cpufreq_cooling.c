@@ -23,7 +23,7 @@
 #include <linux/thermal.h>
 #include <linux/units.h>
 
-#include <trace/events/thermal.h>
+#include "thermal_trace.h"
 
 /*
  * Cooling state <-> CPUFreq frequency
@@ -57,8 +57,6 @@ struct time_in_idle {
  * @max_level: maximum cooling level. One less than total number of valid
  *	cpufreq frequencies.
  * @em: Reference on the Energy Model of the device
- * @cdev: thermal_cooling_device pointer to keep track of the
- *	registered cooling device.
  * @policy: cpufreq policy.
  * @cooling_ops: cpufreq callbacks to thermal cooling device ops
  * @idle_time: idle time stats
@@ -633,7 +631,7 @@ of_cpufreq_cooling_register(struct cpufreq_policy *policy)
 		return NULL;
 	}
 
-	if (of_find_property(np, "#cooling-cells", NULL)) {
+	if (of_property_present(np, "#cooling-cells")) {
 		struct em_perf_domain *em = em_cpu_get(policy->cpu);
 
 		cdev = __cpufreq_cooling_register(np, policy, em);

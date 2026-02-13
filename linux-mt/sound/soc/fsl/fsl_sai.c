@@ -604,6 +604,9 @@ static int fsl_sai_hw_params(struct snd_pcm_substream *substream,
 
 	val_cr4 |= FSL_SAI_CR4_FRSZ(slots);
 
+	/* Set to avoid channel swap */
+	val_cr4 |= FSL_SAI_CR4_FCONT;
+
 	/* Set to output mode to avoid tri-stated data pins */
 	if (tx)
 		val_cr4 |= FSL_SAI_CR4_CHMOD;
@@ -690,7 +693,7 @@ static int fsl_sai_hw_params(struct snd_pcm_substream *substream,
 
 	regmap_update_bits(sai->regmap, FSL_SAI_xCR4(tx, ofs),
 			   FSL_SAI_CR4_SYWD_MASK | FSL_SAI_CR4_FRSZ_MASK |
-			   FSL_SAI_CR4_CHMOD_MASK,
+			   FSL_SAI_CR4_CHMOD_MASK | FSL_SAI_CR4_FCONT_MASK,
 			   val_cr4);
 	regmap_update_bits(sai->regmap, FSL_SAI_xCR5(tx, ofs),
 			   FSL_SAI_CR5_WNW_MASK | FSL_SAI_CR5_W0W_MASK |
@@ -759,13 +762,15 @@ static void fsl_sai_config_disable(struct fsl_sai *sai, int dir)
 	 * anymore. Add software reset to fix this issue.
 	 * This is a hardware bug, and will be fix in the
 	 * next sai version.
+	 *
+	 * In consumer mode, this can happen even after a
+	 * single open/close, especially if both tx and rx
+	 * are running concurrently.
 	 */
-	if (!sai->is_consumer_mode) {
-		/* Software Reset */
-		regmap_write(sai->regmap, FSL_SAI_xCSR(tx, ofs), FSL_SAI_CSR_SR);
-		/* Clear SR bit to finish the reset */
-		regmap_write(sai->regmap, FSL_SAI_xCSR(tx, ofs), 0);
-	}
+	/* Software Reset */
+	regmap_update_bits(sai->regmap, FSL_SAI_xCSR(tx, ofs), FSL_SAI_CSR_SR, FSL_SAI_CSR_SR);
+	/* Clear SR bit to finish the reset */
+	regmap_update_bits(sai->regmap, FSL_SAI_xCSR(tx, ofs), FSL_SAI_CSR_SR, 0);
 }
 
 static int fsl_sai_trigger(struct snd_pcm_substream *substream, int cmd,
@@ -878,7 +883,33 @@ static int fsl_sai_startup(struct snd_pcm_substream *substream,
 	return ret;
 }
 
+static int fsl_sai_dai_probe(struct snd_soc_dai *cpu_dai)
+{
+	struct fsl_sai *sai = dev_get_drvdata(cpu_dai->dev);
+	unsigned int ofs = sai->soc_data->reg_offset;
+
+	/* Software Reset for both Tx and Rx */
+	regmap_update_bits(sai->regmap, FSL_SAI_TCSR(ofs), FSL_SAI_CSR_SR, FSL_SAI_CSR_SR);
+	regmap_update_bits(sai->regmap, FSL_SAI_RCSR(ofs), FSL_SAI_CSR_SR, FSL_SAI_CSR_SR);
+	/* Clear SR bit to finish the reset */
+	regmap_update_bits(sai->regmap, FSL_SAI_TCSR(ofs), FSL_SAI_CSR_SR, 0);
+	regmap_update_bits(sai->regmap, FSL_SAI_RCSR(ofs), FSL_SAI_CSR_SR, 0);
+
+	regmap_update_bits(sai->regmap, FSL_SAI_TCR1(ofs),
+			   FSL_SAI_CR1_RFW_MASK(sai->soc_data->fifo_depth),
+			   sai->soc_data->fifo_depth - sai->dma_params_tx.maxburst);
+	regmap_update_bits(sai->regmap, FSL_SAI_RCR1(ofs),
+			   FSL_SAI_CR1_RFW_MASK(sai->soc_data->fifo_depth),
+			   sai->dma_params_rx.maxburst - 1);
+
+	snd_soc_dai_init_dma_data(cpu_dai, &sai->dma_params_tx,
+				&sai->dma_params_rx);
+
+	return 0;
+}
+
 static const struct snd_soc_dai_ops fsl_sai_pcm_dai_ops = {
+	.probe		= fsl_sai_dai_probe,
 	.set_bclk_ratio	= fsl_sai_set_dai_bclk_ratio,
 	.set_sysclk	= fsl_sai_set_dai_sysclk,
 	.set_fmt	= fsl_sai_set_dai_fmt,
@@ -888,31 +919,6 @@ static const struct snd_soc_dai_ops fsl_sai_pcm_dai_ops = {
 	.trigger	= fsl_sai_trigger,
 	.startup	= fsl_sai_startup,
 };
-
-static int fsl_sai_dai_probe(struct snd_soc_dai *cpu_dai)
-{
-	struct fsl_sai *sai = dev_get_drvdata(cpu_dai->dev);
-	unsigned int ofs = sai->soc_data->reg_offset;
-
-	/* Software Reset for both Tx and Rx */
-	regmap_write(sai->regmap, FSL_SAI_TCSR(ofs), FSL_SAI_CSR_SR);
-	regmap_write(sai->regmap, FSL_SAI_RCSR(ofs), FSL_SAI_CSR_SR);
-	/* Clear SR bit to finish the reset */
-	regmap_write(sai->regmap, FSL_SAI_TCSR(ofs), 0);
-	regmap_write(sai->regmap, FSL_SAI_RCSR(ofs), 0);
-
-	regmap_update_bits(sai->regmap, FSL_SAI_TCR1(ofs),
-			   FSL_SAI_CR1_RFW_MASK(sai->soc_data->fifo_depth),
-			   sai->soc_data->fifo_depth - FSL_SAI_MAXBURST_TX);
-	regmap_update_bits(sai->regmap, FSL_SAI_RCR1(ofs),
-			   FSL_SAI_CR1_RFW_MASK(sai->soc_data->fifo_depth),
-			   FSL_SAI_MAXBURST_RX - 1);
-
-	snd_soc_dai_init_dma_data(cpu_dai, &sai->dma_params_tx,
-				&sai->dma_params_rx);
-
-	return 0;
-}
 
 static int fsl_sai_dai_resume(struct snd_soc_component *component)
 {
@@ -932,7 +938,6 @@ static int fsl_sai_dai_resume(struct snd_soc_component *component)
 }
 
 static struct snd_soc_dai_driver fsl_sai_dai_template = {
-	.probe = fsl_sai_dai_probe,
 	.playback = {
 		.stream_name = "CPU-Playback",
 		.channels_min = 1,
@@ -1450,8 +1455,10 @@ static int fsl_sai_probe(struct platform_device *pdev)
 
 	sai->dma_params_rx.addr = sai->res->start + FSL_SAI_RDR0;
 	sai->dma_params_tx.addr = sai->res->start + FSL_SAI_TDR0;
-	sai->dma_params_rx.maxburst = FSL_SAI_MAXBURST_RX;
-	sai->dma_params_tx.maxburst = FSL_SAI_MAXBURST_TX;
+	sai->dma_params_rx.maxburst =
+		sai->soc_data->max_burst[RX] ? sai->soc_data->max_burst[RX] : FSL_SAI_MAXBURST_RX;
+	sai->dma_params_tx.maxburst =
+		sai->soc_data->max_burst[TX] ? sai->soc_data->max_burst[TX] : FSL_SAI_MAXBURST_TX;
 
 	sai->pinctrl = devm_pinctrl_get(&pdev->dev);
 
@@ -1490,14 +1497,17 @@ static int fsl_sai_probe(struct platform_device *pdev)
 	if (sai->soc_data->use_imx_pcm) {
 		ret = imx_pcm_dma_init(pdev);
 		if (ret) {
+			dev_err_probe(dev, ret, "PCM DMA init failed\n");
 			if (!IS_ENABLED(CONFIG_SND_SOC_IMX_PCM_DMA))
 				dev_err(dev, "Error: You must enable the imx-pcm-dma support!\n");
 			goto err_pm_get_sync;
 		}
 	} else {
 		ret = devm_snd_dmaengine_pcm_register(dev, NULL, 0);
-		if (ret)
+		if (ret) {
+			dev_err_probe(dev, ret, "Registering PCM dmaengine failed\n");
 			goto err_pm_get_sync;
+		}
 	}
 
 	ret = devm_snd_soc_register_component(dev, &fsl_component,
@@ -1516,13 +1526,11 @@ err_pm_disable:
 	return ret;
 }
 
-static int fsl_sai_remove(struct platform_device *pdev)
+static void fsl_sai_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
 	if (!pm_runtime_status_suspended(&pdev->dev))
 		fsl_sai_runtime_suspend(&pdev->dev);
-
-	return 0;
 }
 
 static const struct fsl_sai_soc_data fsl_sai_vf610_data = {
@@ -1625,6 +1633,18 @@ static const struct fsl_sai_soc_data fsl_sai_imx8ulp_data = {
 	.max_register = FSL_SAI_RTCAP,
 };
 
+static const struct fsl_sai_soc_data fsl_sai_imx93_data = {
+	.use_imx_pcm = true,
+	.use_edma = true,
+	.fifo_depth = 128,
+	.reg_offset = 8,
+	.mclk0_is_mclk1 = false,
+	.pins = 4,
+	.flags = 0,
+	.max_register = FSL_SAI_MCTL,
+	.max_burst = {8, 8},
+};
+
 static const struct of_device_id fsl_sai_ids[] = {
 	{ .compatible = "fsl,vf610-sai", .data = &fsl_sai_vf610_data },
 	{ .compatible = "fsl,imx6sx-sai", .data = &fsl_sai_imx6sx_data },
@@ -1636,6 +1656,7 @@ static const struct of_device_id fsl_sai_ids[] = {
 	{ .compatible = "fsl,imx8mp-sai", .data = &fsl_sai_imx8mp_data },
 	{ .compatible = "fsl,imx8ulp-sai", .data = &fsl_sai_imx8ulp_data },
 	{ .compatible = "fsl,imx8mn-sai", .data = &fsl_sai_imx8mn_data },
+	{ .compatible = "fsl,imx93-sai", .data = &fsl_sai_imx93_data },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, fsl_sai_ids);
@@ -1689,11 +1710,11 @@ static int fsl_sai_runtime_resume(struct device *dev)
 
 	regcache_cache_only(sai->regmap, false);
 	regcache_mark_dirty(sai->regmap);
-	regmap_write(sai->regmap, FSL_SAI_TCSR(ofs), FSL_SAI_CSR_SR);
-	regmap_write(sai->regmap, FSL_SAI_RCSR(ofs), FSL_SAI_CSR_SR);
+	regmap_update_bits(sai->regmap, FSL_SAI_TCSR(ofs), FSL_SAI_CSR_SR, FSL_SAI_CSR_SR);
+	regmap_update_bits(sai->regmap, FSL_SAI_RCSR(ofs), FSL_SAI_CSR_SR, FSL_SAI_CSR_SR);
 	usleep_range(1000, 2000);
-	regmap_write(sai->regmap, FSL_SAI_TCSR(ofs), 0);
-	regmap_write(sai->regmap, FSL_SAI_RCSR(ofs), 0);
+	regmap_update_bits(sai->regmap, FSL_SAI_TCSR(ofs), FSL_SAI_CSR_SR, 0);
+	regmap_update_bits(sai->regmap, FSL_SAI_RCSR(ofs), FSL_SAI_CSR_SR, 0);
 
 	ret = regcache_sync(sai->regmap);
 	if (ret)
@@ -1726,7 +1747,7 @@ static const struct dev_pm_ops fsl_sai_pm_ops = {
 
 static struct platform_driver fsl_sai_driver = {
 	.probe = fsl_sai_probe,
-	.remove = fsl_sai_remove,
+	.remove_new = fsl_sai_remove,
 	.driver = {
 		.name = "fsl-sai",
 		.pm = &fsl_sai_pm_ops,

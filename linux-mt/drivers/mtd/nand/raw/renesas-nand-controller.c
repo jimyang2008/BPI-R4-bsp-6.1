@@ -426,6 +426,9 @@ static int rnandc_read_page_hw_ecc(struct nand_chip *chip, u8 *buf,
 	/* Configure DMA */
 	dma_addr = dma_map_single(rnandc->dev, rnandc->buf, mtd->writesize,
 				  DMA_FROM_DEVICE);
+	if (dma_mapping_error(rnandc->dev, dma_addr))
+		return -ENOMEM;
+
 	writel(dma_addr, rnandc->regs + DMA_ADDR_LOW_REG);
 	writel(mtd->writesize, rnandc->regs + DMA_CNT_REG);
 	writel(DMA_TLVL_MAX, rnandc->regs + DMA_TLVL_REG);
@@ -606,6 +609,9 @@ static int rnandc_write_page_hw_ecc(struct nand_chip *chip, const u8 *buf,
 	/* Configure DMA */
 	dma_addr = dma_map_single(rnandc->dev, (void *)rnandc->buf, mtd->writesize,
 				  DMA_TO_DEVICE);
+	if (dma_mapping_error(rnandc->dev, dma_addr))
+		return -ENOMEM;
+
 	writel(dma_addr, rnandc->regs + DMA_ADDR_LOW_REG);
 	writel(mtd->writesize, rnandc->regs + DMA_CNT_REG);
 	writel(DMA_TLVL_MAX, rnandc->regs + DMA_TLVL_REG);
@@ -1386,15 +1392,13 @@ dis_runtime_pm:
 	return ret;
 }
 
-static int rnandc_remove(struct platform_device *pdev)
+static void rnandc_remove(struct platform_device *pdev)
 {
 	struct rnandc *rnandc = platform_get_drvdata(pdev);
 
 	rnandc_chips_cleanup(rnandc);
 
 	pm_runtime_put(&pdev->dev);
-
-	return 0;
 }
 
 static const struct of_device_id rnandc_id_table[] = {
@@ -1410,7 +1414,7 @@ static struct platform_driver rnandc_driver = {
 		.of_match_table = rnandc_id_table,
 	},
 	.probe = rnandc_probe,
-	.remove = rnandc_remove,
+	.remove_new = rnandc_remove,
 };
 module_platform_driver(rnandc_driver);
 

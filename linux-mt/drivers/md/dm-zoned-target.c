@@ -1062,7 +1062,7 @@ static int dmz_iterate_devices(struct dm_target *ti,
 	struct dmz_target *dmz = ti->private;
 	unsigned int zone_nr_sectors = dmz_zone_nr_sectors(dmz->metadata);
 	sector_t capacity;
-	int i, r;
+	int i, r = 0;
 
 	for (i = 0; i < dmz->nr_ddevs; i++) {
 		capacity = dmz->dev[i].capacity & ~(zone_nr_sectors - 1);
@@ -1118,7 +1118,6 @@ static void dmz_status(struct dm_target *ti, status_type_t type,
 		*result = '\0';
 		break;
 	}
-	return;
 }
 
 static int dmz_message(struct dm_target *ti, unsigned int argc, char **argv,
@@ -1138,7 +1137,7 @@ static int dmz_message(struct dm_target *ti, unsigned int argc, char **argv,
 	return r;
 }
 
-static struct target_type dmz_type = {
+static struct target_type zoned_target = {
 	.name		 = "zoned",
 	.version	 = {2, 0, 0},
 	.features	 = DM_TARGET_SINGLETON | DM_TARGET_MIXED_ZONED_MODEL,
@@ -1154,19 +1153,7 @@ static struct target_type dmz_type = {
 	.status		 = dmz_status,
 	.message	 = dmz_message,
 };
-
-static int __init dmz_init(void)
-{
-	return dm_register_target(&dmz_type);
-}
-
-static void __exit dmz_exit(void)
-{
-	dm_unregister_target(&dmz_type);
-}
-
-module_init(dmz_init);
-module_exit(dmz_exit);
+module_dm(zoned);
 
 MODULE_DESCRIPTION(DM_NAME " target for zoned block devices");
 MODULE_AUTHOR("Damien Le Moal <damien.lemoal@wdc.com>");

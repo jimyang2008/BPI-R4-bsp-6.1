@@ -302,6 +302,9 @@ static int ziirave_firm_verify(struct watchdog_device *wdd,
 		const u16 len = be16_to_cpu(rec->len);
 		const u32 addr = be32_to_cpu(rec->addr);
 
+		if (len > sizeof(data))
+			return -EINVAL;
+
 		if (ziirave_firm_addr_readonly(addr))
 			continue;
 
@@ -593,8 +596,7 @@ static int ziirave_wdt_init_duration(struct i2c_client *client)
 					 reset_duration);
 }
 
-static int ziirave_wdt_probe(struct i2c_client *client,
-			     const struct i2c_device_id *id)
+static int ziirave_wdt_probe(struct i2c_client *client)
 {
 	int ret;
 	struct ziirave_wdt_data *w_priv;

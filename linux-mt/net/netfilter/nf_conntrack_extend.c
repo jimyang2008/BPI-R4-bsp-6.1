@@ -23,6 +23,7 @@
 #include <net/netfilter/nf_conntrack_labels.h>
 #include <net/netfilter/nf_conntrack_synproxy.h>
 #include <net/netfilter/nf_conntrack_act_ct.h>
+#include <net/netfilter/nf_conntrack_qos.h>
 #include <net/netfilter/nf_nat.h>
 
 #define NF_CT_EXT_PREALLOC	128u /* conntrack events are on by default */
@@ -36,6 +37,7 @@ static const u8 nf_ct_ext_type_len[NF_CT_EXT_NUM] = {
 #endif
 	[NF_CT_EXT_SEQADJ] = sizeof(struct nf_conn_seqadj),
 	[NF_CT_EXT_ACCT] = sizeof(struct nf_conn_acct),
+	[NF_CT_EXT_QOS] = sizeof(struct nf_conn_qos),
 #ifdef CONFIG_NF_CONNTRACK_EVENTS
 	[NF_CT_EXT_ECACHE] = sizeof(struct nf_conntrack_ecache),
 #endif

@@ -7,13 +7,14 @@
 
 #include <dt-bindings/phy/phy.h>
 #include <linux/clk.h>
+#include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/iopoll.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/nvmem-consumer.h>
+#include <linux/of.h>
 #include <linux/of_address.h>
-#include <linux/of_device.h>
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
@@ -44,6 +45,15 @@
 #define SSUSB_SIFSLV_V2_CHIP		0x100
 #define SSUSB_SIFSLV_V2_U3PHYD		0x200
 #define SSUSB_SIFSLV_V2_U3PHYA		0x400
+
+/* version V4 sub-banks offset base address */
+/* pcie phy banks */
+#define SSUSB_SIFSLV_V4_SPLLC		0x000
+#define SSUSB_SIFSLV_V4_CHIP		0x100
+#define SSUSB_SIFSLV_V4_U3PHYD		0x900
+#define SSUSB_SIFSLV_V4_U3PHYA		0xb00
+
+#define SSUSB_LN1_OFFSET		0x10000
 
 #define U3P_MISC_REG1		0x04
 #define MR1_EFUSE_AUTO_LOAD_DIS		BIT(6)
@@ -192,6 +202,12 @@
 #define U3P_U3_PHYD_RXDET2		0x12c
 #define P3D_RG_RXDET_STB2_SET_P3	GENMASK(8, 0)
 
+#define U3P_U3_PHYD_REG19		0x338
+#define P3D_RG_PLL_SSC_DELTA1          GENMASK(15, 0)
+
+#define U3P_U3_PHYD_REG21		0x340
+#define P3D_RG_PLL_SSC_DELTA           GENMASK(31, 16)
+
 #define U3P_SPLLC_XTALCTL3		0x018
 #define XC3_RG_U3_XTAL_RX_PWD		BIT(9)
 #define XC3_RG_U3_FRC_XTAL_RX_PWD	BIT(8)
@@ -266,6 +282,8 @@
 
 #define TPHY_CLKS_CNT	2
 
+#define USER_BUF_LEN(count) min_t(size_t, 8, (count))
+
 #define HIF_SYSCFG1			0x14
 #define HIF_SYSCFG1_PHY2_MASK		(0x3 << 20)
 
@@ -273,6 +291,7 @@ enum mtk_phy_version {
 	MTK_PHY_V1 = 1,
 	MTK_PHY_V2,
 	MTK_PHY_V3,
+	MTK_PHY_V4,
 };
 
 struct mtk_phy_pdata {
@@ -319,9 +338,16 @@ struct mtk_phy_instance {
 	u32 type_sw_reg;
 	u32 type_sw_index;
 	u32 efuse_sw_en;
+	bool efuse_alv_en;
+	u32 efuse_autoloadvalid;
 	u32 efuse_intr;
 	u32 efuse_tx_imp;
 	u32 efuse_rx_imp;
+	bool efuse_alv_ln1_en;
+	u32 efuse_ln1_autoloadvalid;
+	u32 efuse_intr_ln1;
+	u32 efuse_tx_imp_ln1;
+	u32 efuse_rx_imp_ln1;
 	int eye_src;
 	int eye_vrt;
 	int eye_term;
@@ -329,6 +355,8 @@ struct mtk_phy_instance {
 	int discth;
 	int pre_emphasis;
 	bool bc12_en;
+	bool u3_pll_ssc_delta;
+	bool u3_pll_ssc_delta1;
 };
 
 struct mtk_tphy {
@@ -341,6 +369,358 @@ struct mtk_tphy {
 	int src_ref_clk; /* MHZ, reference clock for slew rate calibrate */
 	int src_coef; /* coefficient for slew rate calibrate */
 };
+
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+
+enum u2_phy_params {
+	U2P_EYE_VRT = 0,
+	U2P_EYE_TERM,
+	U2P_EFUSE_EN,
+	U2P_EFUSE_INTR,
+	U2P_DISCTH,
+	U2P_PRE_EMPHASIS,
+};
+
+enum u3_phy_params {
+	U3P_EFUSE_EN = 0,
+	U3P_EFUSE_INTR,
+	U3P_EFUSE_TX_IMP,
+	U3P_EFUSE_RX_IMP,
+};
+
+static const char *const u2_phy_files[] = {
+	[U2P_EYE_VRT] = "vrt",
+	[U2P_EYE_TERM] = "term",
+	[U2P_EFUSE_EN] = "efuse",
+	[U2P_EFUSE_INTR] = "intr",
+	[U2P_DISCTH] = "discth",
+	[U2P_PRE_EMPHASIS] = "preemph",
+};
+
+static const char *const u3_phy_files[] = {
+	[U3P_EFUSE_EN] = "efuse",
+	[U3P_EFUSE_INTR] = "intr",
+	[U3P_EFUSE_TX_IMP] = "tx-imp",
+	[U3P_EFUSE_RX_IMP] = "rx-imp",
+};
+
+static int u2_phy_params_show(struct seq_file *sf, void *unused)
+{
+	struct mtk_phy_instance *inst = sf->private;
+	const char *fname = file_dentry(sf->file)->d_iname;
+	struct u2phy_banks *u2_banks = &inst->u2_banks;
+	void __iomem *com = u2_banks->com;
+	u32 max = 0;
+	u32 tmp = 0;
+	u32 val = 0;
+	int ret;
+
+	ret = match_string(u2_phy_files, ARRAY_SIZE(u2_phy_files), fname);
+	if (ret < 0)
+		return ret;
+
+	switch (ret) {
+	case U2P_EYE_VRT:
+		tmp = readl(com + U3P_USBPHYACR1);
+		val = FIELD_GET(PA1_RG_VRT_SEL, tmp);
+		max = FIELD_MAX(PA1_RG_VRT_SEL);
+		break;
+
+	case U2P_EYE_TERM:
+		tmp = readl(com + U3P_USBPHYACR1);
+		val = FIELD_GET(PA1_RG_TERM_SEL, tmp);
+		max = FIELD_MAX(PA1_RG_TERM_SEL);
+		break;
+
+	case U2P_EFUSE_EN:
+		if (u2_banks->misc) {
+			tmp = readl(u2_banks->misc + U3P_MISC_REG1);
+			max = 1;
+		}
+
+		val = !!(tmp & MR1_EFUSE_AUTO_LOAD_DIS);
+		break;
+
+	case U2P_EFUSE_INTR:
+		tmp = readl(com + U3P_USBPHYACR1);
+		val = FIELD_GET(PA1_RG_INTR_CAL, tmp);
+		max = FIELD_MAX(PA1_RG_INTR_CAL);
+		break;
+
+	case U2P_DISCTH:
+		tmp = readl(com + U3P_USBPHYACR6);
+		val = FIELD_GET(PA6_RG_U2_DISCTH, tmp);
+		max = FIELD_MAX(PA6_RG_U2_DISCTH);
+		break;
+
+	case U2P_PRE_EMPHASIS:
+		tmp = readl(com + U3P_USBPHYACR6);
+		val = FIELD_GET(PA6_RG_U2_PRE_EMP, tmp);
+		max = FIELD_MAX(PA6_RG_U2_PRE_EMP);
+		break;
+
+	default:
+		seq_printf(sf, "invalid, %d\n", ret);
+		break;
+	}
+
+	seq_printf(sf, "%s : %d [0, %d]\n", fname, val, max);
+
+	return 0;
+}
+
+static int u2_phy_params_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, u2_phy_params_show, inode->i_private);
+}
+
+static ssize_t u2_phy_params_write(struct file *file, const char __user *ubuf,
+				   size_t count, loff_t *ppos)
+{
+	const char *fname = file_dentry(file)->d_iname;
+	struct seq_file *sf = file->private_data;
+	struct mtk_phy_instance *inst = sf->private;
+	struct u2phy_banks *u2_banks = &inst->u2_banks;
+	void __iomem *com = u2_banks->com;
+	ssize_t rc;
+	u32 val;
+	int ret;
+
+	rc = kstrtouint_from_user(ubuf, USER_BUF_LEN(count), 0, &val);
+	if (rc)
+		return rc;
+
+	ret = match_string(u2_phy_files, ARRAY_SIZE(u2_phy_files), fname);
+	if (ret < 0)
+		return (ssize_t)ret;
+
+	switch (ret) {
+	case U2P_EYE_VRT:
+		mtk_phy_update_field(com + U3P_USBPHYACR1, PA1_RG_VRT_SEL, val);
+		break;
+
+	case U2P_EYE_TERM:
+		mtk_phy_update_field(com + U3P_USBPHYACR1, PA1_RG_TERM_SEL, val);
+		break;
+
+	case U2P_EFUSE_EN:
+		if (u2_banks->misc)
+			mtk_phy_update_field(u2_banks->misc + U3P_MISC_REG1,
+					     MR1_EFUSE_AUTO_LOAD_DIS, !!val);
+		break;
+
+	case U2P_EFUSE_INTR:
+		mtk_phy_update_field(com + U3P_USBPHYACR1, PA1_RG_INTR_CAL, val);
+		break;
+
+	case U2P_DISCTH:
+		mtk_phy_update_field(com + U3P_USBPHYACR6, PA6_RG_U2_DISCTH, val);
+		break;
+
+	case U2P_PRE_EMPHASIS:
+		mtk_phy_update_field(com + U3P_USBPHYACR6, PA6_RG_U2_PRE_EMP, val);
+		break;
+
+	default:
+		break;
+	}
+
+	return count;
+}
+
+static const struct file_operations u2_phy_fops = {
+	.open = u2_phy_params_open,
+	.write = u2_phy_params_write,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static void u2_phy_dbgfs_files_create(struct mtk_phy_instance *inst)
+{
+	u32 count = ARRAY_SIZE(u2_phy_files);
+	int i;
+
+	for (i = 0; i < count; i++)
+		debugfs_create_file(u2_phy_files[i], 0644, inst->phy->debugfs,
+				    inst, &u2_phy_fops);
+}
+
+static int u3_phy_params_show(struct seq_file *sf, void *unused)
+{
+	struct mtk_phy_instance *inst = sf->private;
+	const char *fname = file_dentry(sf->file)->d_iname;
+	struct u3phy_banks *u3_banks = &inst->u3_banks;
+	u32 val = 0;
+	u32 max = 0;
+	u32 tmp;
+	int ret;
+
+	ret = match_string(u3_phy_files, ARRAY_SIZE(u3_phy_files), fname);
+	if (ret < 0)
+		return ret;
+
+	switch (ret) {
+	case U3P_EFUSE_EN:
+		tmp = readl(u3_banks->phyd + U3P_U3_PHYD_RSV);
+		val = !!(tmp & P3D_RG_EFUSE_AUTO_LOAD_DIS);
+		max = 1;
+		break;
+
+	case U3P_EFUSE_INTR:
+		tmp = readl(u3_banks->phya + U3P_U3_PHYA_REG0);
+		val = FIELD_GET(P3A_RG_IEXT_INTR, tmp);
+		max = FIELD_MAX(P3A_RG_IEXT_INTR);
+		break;
+
+	case U3P_EFUSE_TX_IMP:
+		tmp = readl(u3_banks->phyd + U3P_U3_PHYD_IMPCAL0);
+		val = FIELD_GET(P3D_RG_TX_IMPEL, tmp);
+		max = FIELD_MAX(P3D_RG_TX_IMPEL);
+		break;
+
+	case U3P_EFUSE_RX_IMP:
+		tmp = readl(u3_banks->phyd + U3P_U3_PHYD_IMPCAL1);
+		val = FIELD_GET(P3D_RG_RX_IMPEL, tmp);
+		max = FIELD_MAX(P3D_RG_RX_IMPEL);
+		break;
+
+	default:
+		seq_printf(sf, "invalid, %d\n", ret);
+		break;
+	}
+
+	seq_printf(sf, "%s : %d [0, %d]\n", fname, val, max);
+
+	return 0;
+}
+
+static int u3_phy_params_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, u3_phy_params_show, inode->i_private);
+}
+
+static ssize_t u3_phy_params_write(struct file *file, const char __user *ubuf,
+				   size_t count, loff_t *ppos)
+{
+	const char *fname = file_dentry(file)->d_iname;
+	struct seq_file *sf = file->private_data;
+	struct mtk_phy_instance *inst = sf->private;
+	struct u3phy_banks *u3_banks = &inst->u3_banks;
+	void __iomem *phyd = u3_banks->phyd;
+	ssize_t rc;
+	u32 val;
+	int ret;
+
+	rc = kstrtouint_from_user(ubuf, USER_BUF_LEN(count), 0, &val);
+	if (rc)
+		return rc;
+
+	ret = match_string(u3_phy_files, ARRAY_SIZE(u3_phy_files), fname);
+	if (ret < 0)
+		return (ssize_t)ret;
+
+	switch (ret) {
+	case U3P_EFUSE_EN:
+		mtk_phy_update_field(phyd + U3P_U3_PHYD_RSV,
+				     P3D_RG_EFUSE_AUTO_LOAD_DIS, !!val);
+		break;
+
+	case U3P_EFUSE_INTR:
+		mtk_phy_update_field(u3_banks->phya + U3P_U3_PHYA_REG0,
+				     P3A_RG_IEXT_INTR, val);
+		break;
+
+	case U3P_EFUSE_TX_IMP:
+		mtk_phy_update_field(phyd + U3P_U3_PHYD_IMPCAL0, P3D_RG_TX_IMPEL, val);
+		mtk_phy_set_bits(phyd + U3P_U3_PHYD_IMPCAL0, P3D_RG_FORCE_TX_IMPEL);
+		break;
+
+	case U3P_EFUSE_RX_IMP:
+		mtk_phy_update_field(phyd + U3P_U3_PHYD_IMPCAL1, P3D_RG_RX_IMPEL, val);
+		mtk_phy_set_bits(phyd + U3P_U3_PHYD_IMPCAL1, P3D_RG_FORCE_RX_IMPEL);
+		break;
+
+	default:
+		break;
+	}
+
+	return count;
+}
+
+static const struct file_operations u3_phy_fops = {
+	.open = u3_phy_params_open,
+	.write = u3_phy_params_write,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static void u3_phy_dbgfs_files_create(struct mtk_phy_instance *inst)
+{
+	u32 count = ARRAY_SIZE(u3_phy_files);
+	int i;
+
+	for (i = 0; i < count; i++)
+		debugfs_create_file(u3_phy_files[i], 0644, inst->phy->debugfs,
+				    inst, &u3_phy_fops);
+}
+
+static int phy_type_show(struct seq_file *sf, void *unused)
+{
+	struct mtk_phy_instance *inst = sf->private;
+	const char *type;
+
+	switch (inst->type) {
+	case PHY_TYPE_USB2:
+		type = "USB2";
+		break;
+	case PHY_TYPE_USB3:
+		type = "USB3";
+		break;
+	case PHY_TYPE_PCIE:
+		type = "PCIe";
+		break;
+	case PHY_TYPE_SGMII:
+		type = "SGMII";
+		break;
+	case PHY_TYPE_SATA:
+		type = "SATA";
+		break;
+	default:
+		type = "";
+	}
+
+	seq_printf(sf, "%s\n", type);
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(phy_type);
+
+/* these files will be removed when phy is released by phy core */
+static void phy_debugfs_init(struct mtk_phy_instance *inst)
+{
+	debugfs_create_file("type", 0444, inst->phy->debugfs, inst, &phy_type_fops);
+
+	switch (inst->type) {
+	case PHY_TYPE_USB2:
+		u2_phy_dbgfs_files_create(inst);
+		break;
+	case PHY_TYPE_USB3:
+	case PHY_TYPE_PCIE:
+		u3_phy_dbgfs_files_create(inst);
+		break;
+	default:
+		break;
+	}
+}
+
+#else
+
+static void phy_debugfs_init(struct mtk_phy_instance *inst)
+{}
+
+#endif
 
 static void hs_slew_rate_calibrate(struct mtk_tphy *tphy,
 	struct mtk_phy_instance *instance)
@@ -440,6 +820,12 @@ static void u3_phy_instance_init(struct mtk_tphy *tphy,
 	mtk_phy_update_field(phyd + U3P_U3_PHYD_RXDET1, P3D_RG_RXDET_STB2_SET, 0x10);
 
 	mtk_phy_update_field(phyd + U3P_U3_PHYD_RXDET2, P3D_RG_RXDET_STB2_SET_P3, 0x10);
+
+	if (instance->u3_pll_ssc_delta1)
+		mtk_phy_update_field(phyd + U3P_U3_PHYD_REG19, P3D_RG_PLL_SSC_DELTA1, 0x1c3);
+
+	if (instance->u3_pll_ssc_delta)
+		mtk_phy_update_field(phyd + U3P_U3_PHYD_REG21, P3D_RG_PLL_SSC_DELTA, 0x1c3);
 
 	dev_dbg(tphy->dev, "%s(%d)\n", __func__, instance->index);
 }
@@ -770,10 +1156,53 @@ static void phy_v2_banks_init(struct mtk_tphy *tphy,
 	}
 }
 
+static void phy_v4_banks_init(struct mtk_tphy *tphy,
+			      struct mtk_phy_instance *instance)
+{
+	struct u2phy_banks *u2_banks = &instance->u2_banks;
+	struct u3phy_banks *u3_banks = &instance->u3_banks;
+
+	switch (instance->type) {
+	case PHY_TYPE_USB2:
+		u2_banks->misc = instance->port_base + SSUSB_SIFSLV_V2_MISC;
+		u2_banks->fmreg = instance->port_base + SSUSB_SIFSLV_V2_U2FREQ;
+		u2_banks->com = instance->port_base + SSUSB_SIFSLV_V2_U2PHY_COM;
+		break;
+	case PHY_TYPE_USB3:
+		u3_banks->spllc = instance->port_base + SSUSB_SIFSLV_V2_SPLLC;
+		u3_banks->chip = instance->port_base + SSUSB_SIFSLV_V2_CHIP;
+		u3_banks->phyd = instance->port_base + SSUSB_SIFSLV_V2_U3PHYD;
+		u3_banks->phya = instance->port_base + SSUSB_SIFSLV_V2_U3PHYA;
+		break;
+	case PHY_TYPE_PCIE:
+		u3_banks->spllc = instance->port_base + SSUSB_SIFSLV_V4_SPLLC;
+		u3_banks->chip = instance->port_base + SSUSB_SIFSLV_V4_CHIP;
+		u3_banks->phyd = instance->port_base + SSUSB_SIFSLV_V4_U3PHYD;
+		u3_banks->phya = instance->port_base + SSUSB_SIFSLV_V4_U3PHYA;
+		break;
+	default:
+		dev_err(tphy->dev, "incompatible PHY type\n");
+		return;
+	}
+}
+
 static void phy_parse_property(struct mtk_tphy *tphy,
 				struct mtk_phy_instance *instance)
 {
 	struct device *dev = &instance->phy->dev;
+
+	if (instance->type == PHY_TYPE_USB3) {
+		instance->u3_pll_ssc_delta =
+			device_property_read_bool(dev,
+				"mediatek,usb3-pll-ssc-delta");
+		instance->u3_pll_ssc_delta1 =
+			device_property_read_bool(dev,
+				"mediatek,usb3-pll-ssc-delta1");
+
+		dev_dbg(dev, "u3_pll_ssc_delta:%i, u3_pll_ssc_delta1:%i\n",
+					instance->u3_pll_ssc_delta,
+					instance->u3_pll_ssc_delta1);
+	}
 
 	if (instance->type != PHY_TYPE_USB2)
 		return;
@@ -900,6 +1329,7 @@ static int phy_efuse_get(struct mtk_tphy *tphy, struct mtk_phy_instance *instanc
 {
 	struct device *dev = &instance->phy->dev;
 	int ret = 0;
+	bool alv = false;
 
 	/* tphy v1 doesn't support sw efuse, skip it */
 	if (!tphy->pdata->sw_efuse_supported) {
@@ -914,6 +1344,20 @@ static int phy_efuse_get(struct mtk_tphy *tphy, struct mtk_phy_instance *instanc
 
 	switch (instance->type) {
 	case PHY_TYPE_USB2:
+		alv = of_property_read_bool(dev->of_node, "auto_load_valid");
+		if (alv) {
+			instance->efuse_alv_en = alv;
+			ret = nvmem_cell_read_variable_le_u32(dev, "auto_load_valid",
+							&instance->efuse_autoloadvalid);
+			if (ret) {
+				dev_err(dev, "fail to get u2 alv efuse, %d\n", ret);
+				break;
+			}
+			dev_info(dev,
+				"u2 auto load valid efuse: ENABLE with value: %u\n",
+				instance->efuse_autoloadvalid);
+		}
+
 		ret = nvmem_cell_read_variable_le_u32(dev, "intr", &instance->efuse_intr);
 		if (ret) {
 			dev_err(dev, "fail to get u2 intr efuse, %d\n", ret);
@@ -927,11 +1371,25 @@ static int phy_efuse_get(struct mtk_tphy *tphy, struct mtk_phy_instance *instanc
 			break;
 		}
 
-		dev_dbg(dev, "u2 efuse - intr %x\n", instance->efuse_intr);
+		dev_info(dev, "u2 efuse - intr %x\n", instance->efuse_intr);
 		break;
 
 	case PHY_TYPE_USB3:
 	case PHY_TYPE_PCIE:
+		alv = of_property_read_bool(dev->of_node, "auto_load_valid");
+		if (alv) {
+			instance->efuse_alv_en = alv;
+			ret = nvmem_cell_read_variable_le_u32(dev, "auto_load_valid",
+							&instance->efuse_autoloadvalid);
+			if (ret) {
+				dev_err(dev, "fail to get u3(pcei) alv efuse, %d\n", ret);
+				break;
+			}
+			dev_info(dev,
+				"u3 auto load valid efuse: ENABLE with value: %u\n",
+				instance->efuse_autoloadvalid);
+		}
+
 		ret = nvmem_cell_read_variable_le_u32(dev, "intr", &instance->efuse_intr);
 		if (ret) {
 			dev_err(dev, "fail to get u3 intr efuse, %d\n", ret);
@@ -959,8 +1417,56 @@ static int phy_efuse_get(struct mtk_tphy *tphy, struct mtk_phy_instance *instanc
 			break;
 		}
 
-		dev_dbg(dev, "u3 efuse - intr %x, rx_imp %x, tx_imp %x\n",
+		dev_info(dev, "u3 efuse - intr %x, rx_imp %x, tx_imp %x\n",
 			instance->efuse_intr, instance->efuse_rx_imp,instance->efuse_tx_imp);
+
+		if (tphy->pdata->version != MTK_PHY_V4)
+			break;
+
+		alv = of_property_read_bool(dev->of_node, "auto_load_valid_ln1");
+		if (alv) {
+			instance->efuse_alv_ln1_en = alv;
+			ret = nvmem_cell_read_variable_le_u32(dev, "auto_load_valid_ln1",
+							&instance->efuse_ln1_autoloadvalid);
+			if (ret) {
+				dev_err(dev, "fail to get pcie auto_load_valid efuse, %d\n", ret);
+				break;
+			}
+			dev_info(dev,
+				"pcie auto load valid efuse: ENABLE with value: %u\n",
+				instance->efuse_ln1_autoloadvalid);
+		}
+
+		ret = nvmem_cell_read_variable_le_u32(dev, "intr_ln1", &instance->efuse_intr_ln1);
+		if (ret) {
+			dev_err(dev, "fail to get u3 lane1 intr efuse, %d\n", ret);
+			break;
+		}
+
+		ret = nvmem_cell_read_variable_le_u32(dev, "rx_imp_ln1", &instance->efuse_rx_imp_ln1);
+		if (ret) {
+			dev_err(dev, "fail to get u3 lane1 rx_imp efuse, %d\n", ret);
+			break;
+		}
+
+		ret = nvmem_cell_read_variable_le_u32(dev, "tx_imp_ln1", &instance->efuse_tx_imp_ln1);
+		if (ret) {
+			dev_err(dev, "fail to get u3 lane1 tx_imp efuse, %d\n", ret);
+			break;
+		}
+
+		/* no efuse, ignore it */
+		if (!instance->efuse_intr_ln1 &&
+		    !instance->efuse_rx_imp_ln1 &&
+		    !instance->efuse_tx_imp_ln1) {
+			dev_warn(dev, "no u3 lane1 efuse, but dts enable it\n");
+			instance->efuse_sw_en = 0;
+			break;
+		}
+
+		dev_info(dev, "u3 lane1 efuse - intr %x, rx_imp %x, tx_imp %x\n",
+			 instance->efuse_intr_ln1, instance->efuse_rx_imp_ln1,
+			 instance->efuse_tx_imp_ln1);
 		break;
 	default:
 		dev_err(dev, "no sw efuse for type %d\n", instance->type);
@@ -981,13 +1487,20 @@ static void phy_efuse_set(struct mtk_phy_instance *instance)
 
 	switch (instance->type) {
 	case PHY_TYPE_USB2:
+		if (instance->efuse_alv_en &&
+		    instance->efuse_autoloadvalid == 1)
+			break;
+
 		mtk_phy_set_bits(u2_banks->misc + U3P_MISC_REG1, MR1_EFUSE_AUTO_LOAD_DIS);
 
 		mtk_phy_update_field(u2_banks->com + U3P_USBPHYACR1, PA1_RG_INTR_CAL,
 				     instance->efuse_intr);
 		break;
 	case PHY_TYPE_USB3:
-	case PHY_TYPE_PCIE:
+		if (instance->efuse_alv_en &&
+		    instance->efuse_autoloadvalid == 1)
+			break;
+
 		mtk_phy_set_bits(u3_banks->phyd + U3P_U3_PHYD_RSV, P3D_RG_EFUSE_AUTO_LOAD_DIS);
 
 		mtk_phy_update_field(u3_banks->phyd + U3P_U3_PHYD_IMPCAL0, P3D_RG_TX_IMPEL,
@@ -1000,6 +1513,55 @@ static void phy_efuse_set(struct mtk_phy_instance *instance)
 
 		mtk_phy_update_field(u3_banks->phya + U3P_U3_PHYA_REG0, P3A_RG_IEXT_INTR,
 				    instance->efuse_intr);
+		break;
+	case PHY_TYPE_PCIE:
+		if (instance->efuse_alv_en &&
+		    instance->efuse_autoloadvalid == 1)
+			break;
+
+		mtk_phy_set_bits(u3_banks->phyd + U3P_U3_PHYD_RSV, P3D_RG_EFUSE_AUTO_LOAD_DIS);
+
+		mtk_phy_update_field(u3_banks->phyd + U3P_U3_PHYD_IMPCAL0, P3D_RG_TX_IMPEL,
+				    instance->efuse_tx_imp);
+		mtk_phy_set_bits(u3_banks->phyd + U3P_U3_PHYD_IMPCAL0, P3D_RG_FORCE_TX_IMPEL);
+
+		mtk_phy_update_field(u3_banks->phyd + U3P_U3_PHYD_IMPCAL1, P3D_RG_RX_IMPEL,
+				    instance->efuse_rx_imp);
+		mtk_phy_set_bits(u3_banks->phyd + U3P_U3_PHYD_IMPCAL1, P3D_RG_FORCE_RX_IMPEL);
+
+		mtk_phy_update_field(u3_banks->phya + U3P_U3_PHYA_REG0, P3A_RG_IEXT_INTR,
+				    instance->efuse_intr);
+
+
+		if ((!instance->efuse_intr_ln1 &&
+		     !instance->efuse_rx_imp_ln1 &&
+		     !instance->efuse_tx_imp_ln1) ||
+		    (instance->efuse_alv_ln1_en &&
+		     instance->efuse_ln1_autoloadvalid == 1))
+			break;
+
+		mtk_phy_set_bits(u3_banks->phyd + SSUSB_LN1_OFFSET + U3P_U3_PHYD_RSV,
+						 P3D_RG_EFUSE_AUTO_LOAD_DIS);
+
+		mtk_phy_update_field(u3_banks->phyd + SSUSB_LN1_OFFSET + U3P_U3_PHYD_IMPCAL0,
+							 P3D_RG_TX_IMPEL,
+							 instance->efuse_tx_imp_ln1);
+		mtk_phy_set_bits(u3_banks->phyd + SSUSB_LN1_OFFSET + U3P_U3_PHYD_IMPCAL0,
+						 P3D_RG_FORCE_TX_IMPEL);
+
+		mtk_phy_update_field(u3_banks->phyd + SSUSB_LN1_OFFSET + U3P_U3_PHYD_IMPCAL1,
+							 P3D_RG_RX_IMPEL,
+							 instance->efuse_rx_imp_ln1);
+		mtk_phy_set_bits(u3_banks->phyd + SSUSB_LN1_OFFSET + U3P_U3_PHYD_IMPCAL1,
+						 P3D_RG_FORCE_RX_IMPEL);
+
+		mtk_phy_update_field(u3_banks->phya + SSUSB_LN1_OFFSET + U3P_U3_PHYA_REG0,
+							 P3A_RG_IEXT_INTR,
+							 instance->efuse_intr_ln1);
+
+		dev_info(dev, "%s set LN1 efuse, tx_imp %x, rx_imp %x intr %x\n",
+			__func__, instance->efuse_tx_imp_ln1,
+			instance->efuse_rx_imp_ln1, instance->efuse_intr_ln1);
 		break;
 	default:
 		dev_warn(dev, "no sw efuse for type %d\n", instance->type);
@@ -1139,6 +1701,9 @@ static struct phy *mtk_phy_xlate(struct device *dev,
 	case MTK_PHY_V3:
 		phy_v2_banks_init(tphy, instance);
 		break;
+	case MTK_PHY_V4:
+		phy_v4_banks_init(tphy, instance);
+		break;
 	default:
 		dev_err(dev, "phy version is not supported\n");
 		return ERR_PTR(-EINVAL);
@@ -1150,6 +1715,7 @@ static struct phy *mtk_phy_xlate(struct device *dev,
 
 	phy_parse_property(tphy, instance);
 	phy_type_set(instance);
+	phy_debugfs_init(instance);
 
 	return instance->phy;
 }
@@ -1190,6 +1756,12 @@ static const struct mtk_phy_pdata mt8195_pdata = {
 	.version = MTK_PHY_V3,
 };
 
+static const struct mtk_phy_pdata tphy_v4_pdata = {
+	.avoid_rx_sen_degradation = false,
+	.sw_efuse_supported = true,
+	.version = MTK_PHY_V4,
+};
+
 static const struct of_device_id mtk_tphy_id_table[] = {
 	{ .compatible = "mediatek,mt2701-u3phy", .data = &tphy_v1_pdata },
 	{ .compatible = "mediatek,mt2712-u3phy", .data = &tphy_v2_pdata },
@@ -1198,6 +1770,7 @@ static const struct of_device_id mtk_tphy_id_table[] = {
 	{ .compatible = "mediatek,generic-tphy-v1", .data = &tphy_v1_pdata },
 	{ .compatible = "mediatek,generic-tphy-v2", .data = &tphy_v2_pdata },
 	{ .compatible = "mediatek,generic-tphy-v3", .data = &tphy_v3_pdata },
+	{ .compatible = "mediatek,generic-tphy-v4", .data = &tphy_v4_pdata },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, mtk_tphy_id_table);

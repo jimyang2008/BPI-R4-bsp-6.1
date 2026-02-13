@@ -17,11 +17,15 @@ struct reg_dump {
 enum {
 	DUMP_TYPE_STRING,
 	DUMP_TYPE_WED,
+	DUMP_TYPE_WED_RING,
 	DUMP_TYPE_WDMA,
+	DUMP_TYPE_WDMA_RX,
 	DUMP_TYPE_WPDMA_TX,
 	DUMP_TYPE_WPDMA_TXFREE,
 	DUMP_TYPE_WPDMA_RX,
 	DUMP_TYPE_WED_RRO,
+	DUMP_TYPE_WED_RING_RX_TYPE1,
+	DUMP_TYPE_WED_RING_RX_TYPE2,
 };
 
 #define DUMP_STR(_str) { _str, 0, DUMP_TYPE_STRING }
@@ -32,20 +36,34 @@ enum {
 	{ _prefix " BASE", _base, __VA_ARGS__ },		\
 	{ _prefix " CNT",  _base + 0x4, __VA_ARGS__ },	\
 	{ _prefix " CIDX", _base + 0x8, __VA_ARGS__ },	\
+	{ _prefix " DIDX", _base + 0xc, __VA_ARGS__ },	\
+	{ _prefix " Qcnt", _base , __VA_ARGS__ }
+
+#define DUMP_RRO_DATA_RING(_prefix, _base, ...)			\
+	{ _prefix " BASE", _base, __VA_ARGS__ },		\
+	{ _prefix " CNT",  _base + 0x4, __VA_ARGS__ },	\
+	{ _prefix " CIDX", _base + 0x8, __VA_ARGS__ },	\
 	{ _prefix " DIDX", _base + 0xc, __VA_ARGS__ }
 
 #define DUMP_WED(_reg) DUMP_REG(_reg, DUMP_TYPE_WED)
 #define DUMP_WED_MASK(_reg, _mask) DUMP_REG_MASK(_reg, _mask)
-#define DUMP_WED_RING(_base) DUMP_RING(#_base, MTK_##_base, DUMP_TYPE_WED)
+#define DUMP_WED_RING(_base) DUMP_RING(#_base, MTK_##_base, DUMP_TYPE_WED_RING)
+#define DUMP_WED_RING_RX_TYPE1(_base) DUMP_RING(#_base, MTK_##_base, DUMP_TYPE_WED_RING_RX_TYPE1)
+#define DUMP_WED_RING_RX_TYPE2(_base) DUMP_RING(#_base, MTK_##_base, DUMP_TYPE_WED_RING_RX_TYPE2)
+#define DUMP_WED_RRO_DATA_RING(_base) DUMP_RRO_DATA_RING(#_base, MTK_##_base, DUMP_TYPE_WED_RRO)
 
 #define DUMP_WDMA(_reg) DUMP_REG(_reg, DUMP_TYPE_WDMA)
 #define DUMP_WDMA_RING(_base) DUMP_RING(#_base, MTK_##_base, DUMP_TYPE_WDMA)
+#define DUMP_WDMA_RING_RX(_base) DUMP_RING(#_base, MTK_##_base, DUMP_TYPE_WDMA_RX)
 
 #define DUMP_WPDMA_TX_RING(_n) DUMP_RING("WPDMA_TX" #_n, 0, DUMP_TYPE_WPDMA_TX, _n)
 #define DUMP_WPDMA_TXFREE_RING DUMP_RING("WPDMA_RX1", 0, DUMP_TYPE_WPDMA_TXFREE)
 #define DUMP_WPDMA_RX_RING(_n)	DUMP_RING("WPDMA_RX" #_n, 0, DUMP_TYPE_WPDMA_RX, _n)
 #define DUMP_WED_RRO_RING(_base)DUMP_RING("WED_RRO_MIOD", MTK_##_base, DUMP_TYPE_WED_RRO)
 #define DUMP_WED_RRO_FDBK(_base)DUMP_RING("WED_RRO_FDBK", MTK_##_base, DUMP_TYPE_WED_RRO)
+#define CAL_TX_QCNT(_cidx, _didx, _cnt) ((_cidx >= _didx) ? (_cidx - _didx) : (_cidx - _didx + _cnt))
+#define CAL_RX_QCNT_TYPE1(_cidx, _didx, _cnt) (_didx > (_cidx & 0xfff) ? (_didx - 1 - (_cidx & 0xfff)) : (_didx - 1 - (_cidx & 0xfff) + _cnt))
+#define CAL_RX_QCNT_TYPE2(_cidx, _didx, _cnt) ((_didx > _cidx) ? (_didx - 1 - _cidx) : (_didx - 1 - _cidx + _cnt))
 
 static void
 print_reg_val(struct seq_file *s, const char *name, u32 val)
@@ -58,7 +76,7 @@ dump_wed_regs(struct seq_file *s, struct mtk_wed_device *dev,
 	      const struct reg_dump *regs, int n_regs)
 {
 	const struct reg_dump *cur;
-	u32 val;
+	u32 val, cnt, cidx, didx;
 
 	for (cur = regs; cur < &regs[n_regs]; cur++) {
 		switch (cur->type) {
@@ -72,16 +90,100 @@ dump_wed_regs(struct seq_file *s, struct mtk_wed_device *dev,
 			val = wed_r32(dev, cur->offset);
 			break;
 		case DUMP_TYPE_WDMA:
-			val = wdma_r32(dev, cur->offset);
+			if (!strstr(cur->name, "Qcnt"))
+				val = wdma_r32(dev, cur->offset);
+			if (strstr(cur->name, "CNT")){
+				cnt = val;
+			}else if (strstr(cur->name, "CIDX"))
+				cidx = val;
+			else if (strstr(cur->name, "DIDX"))
+				didx = val;
+			if (strstr(cur->name, "Qcnt"))
+				val = CAL_TX_QCNT(cidx, didx, cnt);
+			break;
+		case DUMP_TYPE_WDMA_RX:
+			if (!strstr(cur->name, "Qcnt"))
+				val = wdma_r32(dev, cur->offset);
+			if (strstr(cur->name, "CNT")){
+				cnt = val;
+			}else if (strstr(cur->name, "CIDX"))
+				cidx = val;
+			else if (strstr(cur->name, "DIDX"))
+				didx = val;
+			if (strstr(cur->name, "Qcnt"))
+				val = CAL_RX_QCNT_TYPE2(cidx, didx, cnt);
 			break;
 		case DUMP_TYPE_WPDMA_TX:
-			val = wpdma_tx_r32(dev, cur->base, cur->offset);
+			if (!strstr(cur->name, "Qcnt"))
+				val = wpdma_tx_r32(dev, cur->base, cur->offset);
+			if (strstr(cur->name, "CNT"))
+				cnt = val;
+			else if (strstr(cur->name, "CIDX"))
+				cidx = val;
+			else if (strstr(cur->name, "DIDX"))
+				didx = val;
+			if (strstr(cur->name, "Qcnt"))
+				val = CAL_TX_QCNT(cidx, didx, cnt);
 			break;
 		case DUMP_TYPE_WPDMA_TXFREE:
-			val = wpdma_txfree_r32(dev, cur->offset);
+			if (!strstr(cur->name, "Qcnt"))
+				val = wpdma_txfree_r32(dev, cur->offset);
+			if (strstr(cur->name, "CNT"))
+				cnt = val;
+			else if (strstr(cur->name, "CIDX"))
+				cidx = val;
+			else if (strstr(cur->name, "DIDX"))
+				didx = val;
+			if (strstr(cur->name, "Qcnt"))
+				val = CAL_RX_QCNT_TYPE2(cidx, didx, cnt);
 			break;
 		case DUMP_TYPE_WPDMA_RX:
-			val = wpdma_rx_r32(dev, cur->base, cur->offset);
+			if (!strstr(cur->name, "Qcnt"))
+				val = wpdma_rx_r32(dev, cur->base, cur->offset);
+			if (strstr(cur->name, "CNT"))
+				cnt = val;
+			else if (strstr(cur->name, "CIDX"))
+				cidx = val;
+			else if (strstr(cur->name, "DIDX"))
+				didx = val;
+			if (strstr(cur->name, "Qcnt"))
+				val = CAL_RX_QCNT_TYPE2(cidx, didx, cnt);
+			break;
+		case DUMP_TYPE_WED_RING:
+			if (!strstr(cur->name, "Qcnt"))
+				val = wed_r32(dev, cur->offset);
+			if (strstr(cur->name, "CNT"))
+				cnt = val;
+			else if (strstr(cur->name, "CIDX"))
+				cidx = val;
+			else if (strstr(cur->name, "DIDX"))
+				didx = val;
+			if (strstr(cur->name, "Qcnt"))
+				val = CAL_TX_QCNT(cidx, didx, cnt);
+			break;
+		case DUMP_TYPE_WED_RING_RX_TYPE1:
+			if (!strstr(cur->name, "Qcnt"))
+				val = wed_r32(dev, cur->offset);
+			if (strstr(cur->name, "CNT"))
+				cnt = val;
+			else if (strstr(cur->name, "CIDX"))
+				cidx = val;
+			else if (strstr(cur->name, "DIDX"))
+				didx = val;
+			if (strstr(cur->name, "Qcnt"))
+				val = CAL_RX_QCNT_TYPE1(cidx, didx, cnt);
+			break;
+		case DUMP_TYPE_WED_RING_RX_TYPE2:
+			if (!strstr(cur->name, "Qcnt"))
+				val = wed_r32(dev, cur->offset);
+			if (strstr(cur->name, "CNT"))
+				cnt = val;
+			else if (strstr(cur->name, "CIDX"))
+				cidx = val;
+			else if (strstr(cur->name, "DIDX"))
+				didx = val;
+			if (strstr(cur->name, "Qcnt"))
+				val = CAL_RX_QCNT_TYPE2(cidx, didx, cnt);
 			break;
 		}
 		print_reg_val(s, cur->name, val);
@@ -112,41 +214,62 @@ wed_txinfo_show(struct seq_file *s, void *data)
 		DUMP_WPDMA_TX_RING(0),
 		DUMP_WPDMA_TX_RING(1),
 
+		DUMP_STR("WPDMA RX"),
+		DUMP_WPDMA_TXFREE_RING,
+
+		DUMP_STR("WED WPDMA RX (TX FREE)"),
+		DUMP_WED(WED_WPDMA_RX_MIB(0)),
+		DUMP_WED_RING_RX_TYPE1(WED_WPDMA_RING_RX(0)),
+		DUMP_WED(WED_WPDMA_RX_MIB(1)),
+		DUMP_WED_RING_RX_TYPE1(WED_WPDMA_RING_RX(1)),
+		DUMP_WED(WED_WPDMA_RX_COHERENT_MIB(0)),
+		DUMP_WED(WED_WPDMA_RX_EXTC_FRE),
+
+		DUMP_STR("WED RX (TX FREE)"),
+		DUMP_WED(WED_RX_MIB(0)),
+		DUMP_WED_RING_RX_TYPE2(WED_RING_RX(0)),
+
+		DUMP_WED(WED_RX_MIB(1)),
+		DUMP_WED_RING_RX_TYPE2(WED_RING_RX(1)),
+
 		DUMP_STR("WED WDMA RX"),
 		DUMP_WED(WED_WDMA_RX_MIB(0)),
-		DUMP_WED_RING(WED_WDMA_RING_RX(0)),
+		DUMP_WED_RING_RX_TYPE1(WED_WDMA_RING_RX(0)),
 		DUMP_WED(WED_WDMA_RX_THRES(0)),
 		DUMP_WED(WED_WDMA_RX_RECYCLE_MIB(0)),
 		DUMP_WED(WED_WDMA_RX_PROCESSED_MIB(0)),
 
 		DUMP_WED(WED_WDMA_RX_MIB(1)),
-		DUMP_WED_RING(WED_WDMA_RING_RX(1)),
+		DUMP_WED_RING_RX_TYPE1(WED_WDMA_RING_RX(1)),
 		DUMP_WED(WED_WDMA_RX_THRES(1)),
 		DUMP_WED(WED_WDMA_RX_RECYCLE_MIB(1)),
 		DUMP_WED(WED_WDMA_RX_PROCESSED_MIB(1)),
 
 		DUMP_STR("WDMA RX"),
 		DUMP_WDMA(WDMA_GLO_CFG),
-		DUMP_WDMA_RING(WDMA_RING_RX(0)),
-		DUMP_WDMA_RING(WDMA_RING_RX(1)),
-
-		DUMP_STR("WED TX FREE"),
-		DUMP_WED(WED_RX_MIB(0)),
-		DUMP_WED_RING(WED_RING_RX(0)),
-		DUMP_WED(WED_WPDMA_RX_COHERENT_MIB(0)),
-		DUMP_WED(WED_RX_MIB(1)),
-		DUMP_WED_RING(WED_RING_RX(1)),
-		DUMP_WED(WED_WPDMA_RX_COHERENT_MIB(1)),
-
-		DUMP_STR("WED WPDMA TX FREE"),
-		DUMP_WED_RING(WED_WPDMA_RING_RX(0)),
-		DUMP_WED_RING(WED_WPDMA_RING_RX(1)),
+		DUMP_WDMA_RING_RX(WDMA_RING_RX(0)),
+		DUMP_WDMA_RING_RX(WDMA_RING_RX(1)),
 	};
+
+	static const struct reg_dump regs_v3[] = {
+		DUMP_STR("Total Free Tx TKID number"),
+		DUMP_WED(WED_TX_TKID_STATUS),
+	};
+
 	struct mtk_wed_hw *hw = s->private;
 	struct mtk_wed_device *dev = hw->wed_dev;
 
-	if (dev)
+	if (dev) {
 		dump_wed_regs(s, dev, regs, ARRAY_SIZE(regs));
+		switch(dev->hw->version) {
+		case MTK_WED_HW_V3:
+		case MTK_WED_HW_V3_1:
+			dump_wed_regs(s, dev, regs_v3, ARRAY_SIZE(regs_v3));
+			break;
+		default:
+			break;
+		}
+	}
 
 	return 0;
 }
@@ -156,22 +279,39 @@ static int
 wed_rxinfo_show(struct seq_file *s, void *data)
 {
 	static const struct reg_dump regs_common[] = {
+		DUMP_STR("WED RX INT info"),
+		DUMP_WED(WED_PCIE_INT_CTRL),
+		DUMP_WED(WED_PCIE_INT_REC),
+		DUMP_WED(WED_WPDMA_INT_STA_REC),
+		DUMP_WED(WED_WPDMA_INT_MON),
+		DUMP_WED(WED_WPDMA_INT_CTRL),
+		DUMP_WED(WED_WPDMA_INT_CTRL_TX),
+		DUMP_WED(WED_WPDMA_INT_CTRL_RX),
+		DUMP_WED(WED_WPDMA_INT_CTRL_TX_FREE),
+		DUMP_WED(WED_WPDMA_STATUS),
+		DUMP_WED(WED_WPDMA_D_ST),
+		DUMP_WED(WED_WPDMA_RX_D_GLO_CFG),
+
+		DUMP_STR("WED RX"),
+		DUMP_WED_RING_RX_TYPE2(WED_RING_RX_DATA(0)),
+		DUMP_WED_RING_RX_TYPE2(WED_RING_RX_DATA(1)),
+
 		DUMP_STR("WPDMA RX"),
 		DUMP_WPDMA_RX_RING(0),
 		DUMP_WPDMA_RX_RING(1),
 
-		DUMP_STR("WPDMA RX"),
+		DUMP_STR("WED WPDMA RX"),
+		DUMP_WED_RING_RX_TYPE1(WED_WPDMA_RING_RX_DATA(0)),
+		DUMP_WED_RING_RX_TYPE1(WED_WPDMA_RING_RX_DATA(1)),
 		DUMP_WED(WED_WPDMA_RX_D_MIB(0)),
-		DUMP_WED_RING(WED_WPDMA_RING_RX_DATA(0)),
-		DUMP_WED(WED_WPDMA_RX_D_PROCESSED_MIB(0)),
 		DUMP_WED(WED_WPDMA_RX_D_MIB(1)),
-		DUMP_WED_RING(WED_WPDMA_RING_RX_DATA(1)),
+		DUMP_WED(WED_WPDMA_RX_D_RECYCLE_MIB(0)),
+		DUMP_WED(WED_WPDMA_RX_D_RECYCLE_MIB(1)),
+		DUMP_WED(WED_WPDMA_RX_D_PROCESSED_MIB(0)),
 		DUMP_WED(WED_WPDMA_RX_D_PROCESSED_MIB(1)),
 		DUMP_WED(WED_WPDMA_RX_D_COHERENT_MIB),
+		DUMP_WED(WED_WPDMA_RX_D_ERR_STATUS),
 
-		DUMP_STR("WED RX"),
-		DUMP_WED_RING(WED_RING_RX_DATA(0)),
-		DUMP_WED_RING(WED_RING_RX_DATA(1)),
 
 		DUMP_STR("WED WO RRO"),
 		DUMP_WED_RRO_RING(WED_RROQM_MIOD_CTRL0),
@@ -179,14 +319,16 @@ wed_rxinfo_show(struct seq_file *s, void *data)
 		DUMP_WED(WED_RROQM_MOD_MIB),
 		DUMP_WED(WED_RROQM_MOD_COHERENT_MIB),
 		DUMP_WED_RRO_FDBK(WED_RROQM_FDBK_CTRL0),
+		DUMP_WED(WED_RROQM_FDBK_MIB),
+		DUMP_WED(WED_RROQM_FDBK_COHERENT_MIB),
 		DUMP_WED(WED_RROQM_FDBK_IND_MIB),
 		DUMP_WED(WED_RROQM_FDBK_ENQ_MIB),
 		DUMP_WED(WED_RROQM_FDBK_ANC_MIB),
 		DUMP_WED(WED_RROQM_FDBK_ANC2H_MIB),
 
 		DUMP_STR("WED WDMA TX"),
-		DUMP_WED(WED_WDMA_TX_MIB),
 		DUMP_WED_RING(WED_WDMA_RING_TX),
+		DUMP_WED(WED_WDMA_TX_MIB),
 
 		DUMP_STR("WDMA TX"),
 		DUMP_WDMA(WDMA_GLO_CFG),
@@ -195,14 +337,9 @@ wed_rxinfo_show(struct seq_file *s, void *data)
 
 		DUMP_STR("WED RX BM"),
 		DUMP_WED(WED_RX_BM_BASE),
-		DUMP_WED(WED_RX_BM_RX_DMAD),
 		DUMP_WED(WED_RX_BM_PTR),
-		DUMP_WED(WED_RX_BM_TKID_MIB),
-		DUMP_WED(WED_RX_BM_BLEN),
-		DUMP_WED(WED_RX_BM_STS),
-		DUMP_WED(WED_RX_BM_INTF2),
-		DUMP_WED(WED_RX_BM_INTF),
-		DUMP_WED(WED_RX_BM_ERR_STS),
+		DUMP_WED_MASK(WED_RX_BM_PTR, WED_RX_BM_PTR_HEAD),
+		DUMP_WED_MASK(WED_RX_BM_PTR, WED_RX_BM_PTR_TAIL),
 	};
 	static const struct reg_dump regs_wed_v2[] = {
 		DUMP_STR("WED Route QM"),
@@ -217,30 +354,71 @@ wed_rxinfo_show(struct seq_file *s, void *data)
 		DUMP_WED(WED_RTQM_PFDBK_MIB),
 	};
 	static const struct reg_dump regs_wed_v3[] = {
+		DUMP_STR("WED PG BM"),
+		DUMP_WED(WED_RRO_PG_BM_BASE),
+		DUMP_WED(WED_RRO_PG_BM_ADD_BASE_H),
+		DUMP_WED(WED_RRO_PG_BM_PTR),
+		DUMP_WED_MASK(WED_RRO_PG_BM_PTR, WED_RX_BM_PTR_HEAD),
+		DUMP_WED_MASK(WED_RRO_PG_BM_PTR, WED_RX_BM_PTR_TAIL),
+		DUMP_WED(WED_RRO_PG_BM_STATUS),
+		DUMP_WED(WED_RRO_PG_BM_INTF),
+		DUMP_WED(WED_RRO_PG_BM_ERR_STATUS),
+		DUMP_WED(WED_RRO_PG_BM_OPT_CTRL),
+		DUMP_WED(WED_RRO_PG_BM_TOTAL_DMAD),
+
 		DUMP_STR("WED RX RRO DATA"),
-		DUMP_WED_RING(WED_RRO_RX_D_RX(0)),
-		DUMP_WED_RING(WED_RRO_RX_D_RX(1)),
+		DUMP_WED_MASK(WED_RRO_RX_D_RX_CNT(0), WED_RRO_RX_D_RX_MAX_CNT),
+		DUMP_WED_MASK(WED_RRO_RX_D_RX_CNT(0), WED_RRO_RX_D_RX_MAGIC_CNT),
+		DUMP_WED_RRO_DATA_RING(WED_RRO_RX_D_RX(0)),
+		DUMP_WED_MASK(WED_RRO_RX_D_RX_CNT(1), WED_RRO_RX_D_RX_MAX_CNT),
+		DUMP_WED_MASK(WED_RRO_RX_D_RX_CNT(1), WED_RRO_RX_D_RX_MAGIC_CNT),
+		DUMP_WED_RRO_DATA_RING(WED_RRO_RX_D_RX(1)),
+		DUMP_WED(WED_RRO_RX_D_CFG(0)),
+		DUMP_WED(WED_RRO_RX_D_CFG(1)),
+		DUMP_WED(WED_RRO_RX_D_CFG(2)),
 
 		DUMP_STR("WED RX MSDU PAGE"),
-		DUMP_WED_RING(WED_RRO_MSDU_PG_CTRL0(0)),
-		DUMP_WED_RING(WED_RRO_MSDU_PG_CTRL0(1)),
-		DUMP_WED_RING(WED_RRO_MSDU_PG_CTRL0(2)),
+		DUMP_WED(WED_RRO_MSDU_PG_RING_CFG(0)),
+		DUMP_WED(WED_RRO_MSDU_PG_RING_CFG1(0)),
+		DUMP_WED(WED_RRO_MSDU_PG_RING_CFG(1)),
+		DUMP_WED(WED_RRO_MSDU_PG_RING_CFG1(1)),
+		DUMP_WED(WED_RRO_MSDU_PG_RING_CFG(2)),
+		DUMP_WED(WED_RRO_MSDU_PG_RING_CFG1(2)),
+		DUMP_WED(WED_RRO_MSDU_PG_CTRL0(0)),
+		DUMP_WED(WED_RRO_MSDU_PG_CTRL1(0)),
+		DUMP_WED(WED_RRO_MSDU_PG_CTRL2(0)),
+		DUMP_WED(WED_RRO_MSDU_PG_CTRL0(1)),
+		DUMP_WED(WED_RRO_MSDU_PG_CTRL1(1)),
+		DUMP_WED(WED_RRO_MSDU_PG_CTRL2(1)),
+		DUMP_WED(WED_RRO_MSDU_PG_CTRL0(2)),
+		DUMP_WED(WED_RRO_MSDU_PG_CTRL1(2)),
+		DUMP_WED(WED_RRO_MSDU_PG_CTRL2(2)),
 
 		DUMP_STR("WED RX IND CMD"),
-		DUMP_WED(WED_IND_CMD_RX_CTRL1),
-		DUMP_WED_MASK(WED_IND_CMD_RX_CTRL2, WED_IND_CMD_MAX_CNT),
-		DUMP_WED_MASK(WED_IND_CMD_RX_CTRL0, WED_IND_CMD_PROC_IDX),
-		DUMP_WED_MASK(RRO_IND_CMD_SIGNATURE, RRO_IND_CMD_DMA_IDX),
-		DUMP_WED_MASK(WED_IND_CMD_RX_CTRL0, WED_IND_CMD_MAGIC_CNT),
+		DUMP_WED_MASK(RRO_IND_CMD_SIGNATURE, RRO_IND_CMD_VLD),
 		DUMP_WED_MASK(RRO_IND_CMD_SIGNATURE, RRO_IND_CMD_MAGIC_CNT),
+		DUMP_WED_MASK(RRO_IND_CMD_SIGNATURE, RRO_IND_CMD_SW_PROC_IDX),
+		DUMP_WED_MASK(RRO_IND_CMD_SIGNATURE, RRO_IND_CMD_DMA_IDX),
+		DUMP_WED_MASK(WED_IND_CMD_RX_CTRL0,
+			      WED_IND_CMD_MAGIC_CNT_PROC_IDX),
+		DUMP_WED_MASK(WED_IND_CMD_RX_CTRL0, WED_IND_CMD_MAGIC_CNT),
 		DUMP_WED_MASK(WED_IND_CMD_RX_CTRL0,
 			      WED_IND_CMD_PREFETCH_FREE_CNT),
+		DUMP_WED_MASK(WED_IND_CMD_RX_CTRL0, WED_IND_CMD_PROC_IDX),
+		DUMP_WED(WED_IND_CMD_RX_CTRL1),
+		DUMP_WED_MASK(WED_IND_CMD_RX_CTRL2, WED_IND_CMD_BASE_M),
+		DUMP_WED_MASK(WED_IND_CMD_RX_CTRL2, WED_IND_CMD_MAX_CNT),
+		DUMP_WED(WED_RRO_CFG0),
+		DUMP_WED_MASK(WED_RRO_CFG1, WED_RRO_CFG1_MAX_WIN_SZ),
+		DUMP_WED_MASK(WED_RRO_CFG1, WED_RRO_CFG1_ACK_SN_BASE_M),
 		DUMP_WED_MASK(WED_RRO_CFG1, WED_RRO_CFG1_PARTICL_SE_ID),
 
 		DUMP_STR("WED ADDR ELEM"),
 		DUMP_WED(WED_ADDR_ELEM_CFG0),
 		DUMP_WED_MASK(WED_ADDR_ELEM_CFG1,
 			      WED_ADDR_ELEM_PREFETCH_FREE_CNT),
+		DUMP_WED_MASK(WED_ADDR_ELEM_CFG1,
+			      WED_ADDR_ELEM_PARTICL_SE_ID_BASE_M),
 
 		DUMP_STR("WED Route QM"),
 		DUMP_WED(WED_RTQM_ENQ_I2Q_DMAD_CNT),
@@ -257,17 +435,68 @@ wed_rxinfo_show(struct seq_file *s, void *data)
 		DUMP_WED(WED_RTQM_DEQ_USED_PFDBK_CNT),
 		DUMP_WED(WED_RTQM_DEQ_ERR_CNT),
 	};
+
+	static const struct reg_dump regs_wed_v3_1[] = {
+		DUMP_STR("WED RX INT info"),
+		DUMP_WED(WED_PCIE_INT_CTRL),
+		DUMP_WED(WED_PCIE_INT_REC),
+		DUMP_WED(WED_WPDMA_INT_STA_REC),
+		DUMP_WED(WED_WPDMA_INT_MON),
+		DUMP_WED(WED_WPDMA_INT_CTRL),
+		DUMP_WED(WED_WPDMA_INT_CTRL_TX),
+		DUMP_WED(WED_WPDMA_INT_CTRL_RX),
+		DUMP_WED(WED_WPDMA_INT_CTRL_TX_FREE),
+		DUMP_WED(WED_WPDMA_STATUS),
+		DUMP_WED(WED_WPDMA_D_ST),
+
+		DUMP_STR("WED RX"),
+		DUMP_WED_RING_RX_TYPE2(WED_RING_RX_DATA(0)),
+
+		DUMP_STR("WED WPDMA RRO3.1 RX"),
+		DUMP_WED(WED_WPDMA_RRO3_1_RX_D_RX_MIB),
+		DUMP_WED_RING_RX_TYPE1(WED_WPDMA_RRO3_1_RX_D_RX),
+		DUMP_STR("WED WDMA TX"),
+		DUMP_WED_RING(WED_WDMA_RING_TX),
+		DUMP_WED(WED_WDMA_TX_MIB),
+
+		DUMP_STR("WDMA TX"),
+		DUMP_WDMA(WDMA_GLO_CFG),
+		DUMP_WDMA_RING(WDMA_RING_TX(0)),
+		DUMP_WDMA_RING(WDMA_RING_TX(1)),
+
+		DUMP_STR("WED RX BM"),
+		DUMP_WED(WED_RX_BM_BASE),
+		DUMP_WED(WED_RX_BM_PTR),
+		DUMP_WED_MASK(WED_RX_BM_PTR, WED_RX_BM_PTR_HEAD),
+		DUMP_WED_MASK(WED_RX_BM_PTR, WED_RX_BM_PTR_TAIL),
+	};
+
 	struct mtk_wed_hw *hw = s->private;
 	struct mtk_wed_device *dev = hw->wed_dev;
 
 	if (dev) {
-		dump_wed_regs(s, dev, regs_common, ARRAY_SIZE(regs_common));
-		if (mtk_wed_is_v2(hw))
+		switch(dev->hw->version) {
+		case MTK_WED_HW_V2:
+			dump_wed_regs(s, dev,
+				      regs_common, ARRAY_SIZE(regs_common));
 			dump_wed_regs(s, dev,
 				      regs_wed_v2, ARRAY_SIZE(regs_wed_v2));
-		else
+			break;
+		case MTK_WED_HW_V3:
+			dump_wed_regs(s, dev,
+				      regs_common, ARRAY_SIZE(regs_common));
 			dump_wed_regs(s, dev,
 				      regs_wed_v3, ARRAY_SIZE(regs_wed_v3));
+			break;
+		case MTK_WED_HW_V3_1:
+			dump_wed_regs(s, dev,
+				      regs_wed_v3_1, ARRAY_SIZE(regs_wed_v3_1));
+			dump_wed_regs(s, dev,
+				      regs_wed_v3, ARRAY_SIZE(regs_wed_v3));
+			break;
+		default:
+			break;
+		}
 	}
 
 	return 0;
@@ -470,6 +699,21 @@ wed_amsdu_show(struct seq_file *s, void *data)
 		DUMP_WED_MASK(WED_MON_AMSDU_QMEM_PTR(9), WED_AMSDU_QMEM_TID6_QTAIL),
 		DUMP_WED_MASK(WED_MON_AMSDU_QMEM_PTR(9), WED_AMSDU_QMEM_TID7_QTAIL),
 
+		DUMP_STR("WED HIFTXD BUFF NUM"),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(1)),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(2)),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(3)),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(4)),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(5)),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(6)),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(7)),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(8)),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(9)),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(10)),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(11)),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(12)),
+		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_BUFF(13)),
+
 		DUMP_STR("WED HIFTXD MSDU INFO"),
 		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_MSDU(1)),
 		DUMP_WED(WED_MON_AMSDU_HIFTXD_FETCH_MSDU(2)),
@@ -583,6 +827,125 @@ wed_rro_show(struct seq_file *s, void *data)
 DEFINE_SHOW_ATTRIBUTE(wed_rro);
 
 static int
+wed_hw_cfg_show(struct seq_file *s, void *data)
+{
+	static const struct reg_dump regs_common[] = {
+		DUMP_STR("WED basic info"),
+		DUMP_WED(WED_REV_ID),
+		DUMP_WED(WED_CTRL),
+		DUMP_WED(WED_CTRL2),
+		DUMP_WED(WED_EXT_INT_STATUS),
+		DUMP_WED(WED_EXT_INT_MASK),
+		DUMP_WED(WED_STATUS),
+		DUMP_WED(WED_GLO_CFG),
+		DUMP_WED(WED_INT_STATUS),
+		DUMP_WED(WED_INT_MASK),
+		DUMP_WED(WED_AXI_CTRL),
+
+		DUMP_STR("WED TX buf info"),
+		DUMP_WED(WED_BM_STATUS),
+		DUMP_WED(WED_TX_BM_BASE),
+		DUMP_WED(WED_TX_BM_CTRL),
+		DUMP_WED(WED_TX_BM_STATUS),
+		DUMP_WED(WED_TX_BM_DYN_THR),
+		DUMP_WED(WED_TX_BM_RECYC),
+		DUMP_WED(WED_TX_TKID_CTRL),
+		DUMP_WED(WED_TX_TKID_TKID),
+		DUMP_WED(WED_TX_TKID_DYN_THR),
+		DUMP_WED(WED_TX_TKID_INTF),
+		DUMP_WED(WED_TX_TKID_RECYC),
+		DUMP_WED(WED_TX_FREE_TO_TX_TKID_TKID_MIB),
+		DUMP_WED(WED_TX_BM_TO_WDMA_RX_DRV_SKBID_MIB),
+		DUMP_WED(WED_TX_TKID_TO_TX_BM_FREE_SKBID_MIB),
+
+		DUMP_STR("WED RX BM info"),
+		DUMP_WED(WED_RX_BM_RX_DMAD),
+		DUMP_WED(WED_RX_BM_BASE),
+		DUMP_WED(WED_RX_BM_INIT_PTR),
+		DUMP_WED(WED_RX_BM_PTR),
+		DUMP_WED(WED_RX_BM_BLEN),
+		DUMP_WED(WED_RX_BM_STS),
+		DUMP_WED(WED_RX_BM_INTF2),
+		DUMP_WED(WED_RX_BM_INTF),
+		DUMP_WED(WED_RX_BM_ERR_STS),
+
+		DUMP_STR("WED RRO QM"),
+		DUMP_WED(WED_RROQM_GLO_CFG),
+		DUMP_WED(WED_RROQM_MIOD_CTRL0),
+		DUMP_WED(WED_RROQM_MIOD_CTRL1),
+		DUMP_WED(WED_RROQM_MIOD_CTRL2),
+		DUMP_WED(WED_RROQM_MIOD_CTRL3),
+		DUMP_WED(WED_RROQM_FDBK_CTRL0),
+		DUMP_WED(WED_RROQM_FDBK_CTRL1),
+		DUMP_WED(WED_RROQM_FDBK_CTRL2),
+		DUMP_WED(WED_RROQM_FDBK_CTRL3),
+		DUMP_WED(WED_RROQ_BASE_L),
+		DUMP_WED(WED_RROQ_BASE_H),
+		DUMP_WED(WED_RROQM_MIOD_CFG),
+
+		DUMP_STR("WED PCI Host Control"),
+		DUMP_WED(WED_PCIE_CFG_BASE),
+		DUMP_WED(WED_PCIE_CFG_INTM),
+		DUMP_WED(WED_PCIE_INT_TRIGGER),
+		DUMP_WED(WED_PCIE_INT_REC),
+		DUMP_WED(WED_PCIE_INTM_REC),
+		DUMP_WED(WED_PCIE_INT_CTRL),
+
+		DUMP_STR("WED_WPDMA basic info"),
+		DUMP_WED(WED_WPDMA_STATUS),
+		DUMP_WED(WED_WPDMA_INT_STA_REC),
+		DUMP_WED(WED_WPDMA_GLO_CFG),
+		DUMP_WED(WED_WPDMA_CFG_BASE),
+		DUMP_WED(WED_WPDMA_CFG_INT_MASK),
+		DUMP_WED(WED_WPDMA_CFG_TX),
+		DUMP_WED(WED_WPDMA_CFG_TX_FREE),
+		DUMP_WED(WED_WPDMA_CTRL),
+		DUMP_WED(WED_WPDMA_RX_GLO_CFG),
+		DUMP_WED(WED_WPDMA_RX_RING0),
+		DUMP_WED(WED_WPDMA_RX_RING1),
+
+		DUMP_STR("WED_WDMA basic info"),
+		DUMP_WED(WED_WDMA_STATUS),
+		DUMP_WED(WED_WDMA_INFO),
+		DUMP_WED(WED_WDMA_GLO_CFG),
+		DUMP_WED(WED_WDMA_RESET_IDX),
+		DUMP_WED(WED_WDMA_LOAD_DRV_IDX),
+		DUMP_WED(WED_WDMA_LOAD_CRX_IDX),
+		DUMP_WED(WED_WDMA_SPR),
+		DUMP_WED(WED_WDMA_INT_STA_REC),
+		DUMP_WED(WED_WDMA_INT_TRIGGER),
+		DUMP_WED(WED_WDMA_INT_CTRL),
+		DUMP_WED(WED_WDMA_INT_CLR),
+		DUMP_WED(WED_WDMA_CFG_BASE),
+		DUMP_WED(WED_WDMA_OFFSET0),
+		DUMP_WED(WED_WDMA_OFFSET1),
+
+		DUMP_STR("WDMA basic info"),
+		DUMP_WDMA(WDMA_GLO_CFG),
+		DUMP_WDMA(WDMA_INT_MASK),
+		DUMP_WDMA(WDMA_INT_STATUS),
+		DUMP_WDMA(WDMA_INFO),
+		DUMP_WDMA(WDMA_FREEQ_THRES),
+		DUMP_WDMA(WDMA_INT_STS_GRP0),
+		DUMP_WDMA(WDMA_INT_STS_GRP1),
+		DUMP_WDMA(WDMA_INT_STS_GRP2),
+		DUMP_WDMA(WDMA_INT_GRP1),
+		DUMP_WDMA(WDMA_INT_GRP2),
+		DUMP_WDMA(WDMA_SCH_Q01_CFG),
+		DUMP_WDMA(WDMA_SCH_Q23_CFG),
+	};
+
+	struct mtk_wed_hw *hw = s->private;
+	struct mtk_wed_device *dev = hw->wed_dev;
+
+	if (dev)
+		dump_wed_regs(s, dev, regs_common, ARRAY_SIZE(regs_common));
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(wed_hw_cfg);
+
+static int
 mtk_wed_reg_set(void *data, u64 val)
 {
 	struct mtk_wed_hw *hw = data;
@@ -617,8 +980,6 @@ void mtk_wed_hw_add_debugfs(struct mtk_wed_hw *hw)
 
 	snprintf(hw->dirname, sizeof(hw->dirname), "wed%d", hw->index);
 	dir = debugfs_create_dir(hw->dirname, NULL);
-	if (!dir)
-		return;
 
 	hw->debugfs_dir = dir;
 	debugfs_create_u32("regidx", 0600, dir, &hw->debugfs_reg);
@@ -627,6 +988,8 @@ void mtk_wed_hw_add_debugfs(struct mtk_wed_hw *hw)
 	if (!mtk_wed_is_v1(hw)) {
 		debugfs_create_file_unsafe("rxinfo", 0400, dir, hw,
 					   &wed_rxinfo_fops);
+		debugfs_create_file_unsafe("cfg", 0600, dir, hw,
+					   &wed_hw_cfg_fops);
 		if (mtk_wed_is_v3_or_greater(hw)) {
 			debugfs_create_file_unsafe("amsdu", 0400, dir, hw,
 						   &wed_amsdu_fops);

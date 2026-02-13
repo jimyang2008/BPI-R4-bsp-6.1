@@ -21,7 +21,8 @@
 
 #define VBOXSF_SUPER_MAGIC 0x786f4256 /* 'VBox' little endian */
 
-static const unsigned char VBSF_MOUNT_SIGNATURE[4] = "\000\377\376\375";
+static const unsigned char VBSF_MOUNT_SIGNATURE[4] = { '\000', '\377', '\376',
+						       '\375' };
 
 static int follow_symlinks;
 module_param(follow_symlinks, int, 0444);
@@ -151,7 +152,7 @@ static int vboxsf_fill_super(struct super_block *sb, struct fs_context *fc)
 		if (!sbi->nls) {
 			vbg_err("vboxsf: Count not load '%s' nls\n", nls_name);
 			err = -EINVAL;
-			goto fail_free;
+			goto fail_destroy_idr;
 		}
 	}
 
@@ -176,7 +177,7 @@ static int vboxsf_fill_super(struct super_block *sb, struct fs_context *fc)
 	}
 	folder_name->size = size;
 	folder_name->length = size - 1;
-	strlcpy(folder_name->string.utf8, fc->source, size);
+	strscpy(folder_name->string.utf8, fc->source, size);
 	err = vboxsf_map_folder(folder_name, &sbi->root);
 	kfree(folder_name);
 	if (err) {
@@ -224,6 +225,7 @@ fail_free:
 		ida_simple_remove(&vboxsf_bdi_ida, sbi->bdi_id);
 	if (sbi->nls)
 		unload_nls(sbi->nls);
+fail_destroy_idr:
 	idr_destroy(&sbi->ino_idr);
 	kfree(sbi);
 	return err;

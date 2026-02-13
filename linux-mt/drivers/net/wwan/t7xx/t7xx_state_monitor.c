@@ -97,14 +97,21 @@ void t7xx_fsm_broadcast_state(struct t7xx_fsm_ctl *ctl, enum md_state state)
 	fsm_state_notify(ctl->md, state);
 }
 
+static void fsm_release_command(struct kref *ref)
+{
+	struct t7xx_fsm_command *cmd = container_of(ref, typeof(*cmd), refcnt);
+
+	kfree(cmd);
+}
+
 static void fsm_finish_command(struct t7xx_fsm_ctl *ctl, struct t7xx_fsm_command *cmd, int result)
 {
 	if (cmd->flag & FSM_CMD_FLAG_WAIT_FOR_COMPLETION) {
-		*cmd->ret = result;
-		complete_all(cmd->done);
+		cmd->result = result;
+		complete_all(&cmd->done);
 	}
 
-	kfree(cmd);
+	kref_put(&cmd->refcnt, fsm_release_command);
 }
 
 static void fsm_del_kf_event(struct t7xx_fsm_event *event)
@@ -285,8 +292,9 @@ static int fsm_routine_starting(struct t7xx_fsm_ctl *ctl)
 	t7xx_fsm_broadcast_state(ctl, MD_STATE_WAITING_FOR_HS1);
 	t7xx_md_event_notify(md, FSM_START);
 
-	wait_event_interruptible_timeout(ctl->async_hk_wq, md->core_md.ready || ctl->exp_flg,
-					 HZ * 60);
+	wait_event_interruptible_timeout(ctl->async_hk_wq,
+					 (md->core_md.ready && md->core_ap.ready) ||
+					  ctl->exp_flg, HZ * 60);
 	dev = &md->t7xx_dev->pdev->dev;
 
 	if (ctl->exp_flg)
@@ -296,6 +304,13 @@ static int fsm_routine_starting(struct t7xx_fsm_ctl *ctl)
 		dev_err(dev, "MD handshake timeout\n");
 		if (md->core_md.handshake_ongoing)
 			t7xx_fsm_append_event(ctl, FSM_EVENT_MD_HS2_EXIT, NULL, 0);
+
+		fsm_routine_exception(ctl, NULL, EXCEPTION_HS_TIMEOUT);
+		return -ETIMEDOUT;
+	} else if (!md->core_ap.ready) {
+		dev_err(dev, "AP handshake timeout\n");
+		if (md->core_ap.handshake_ongoing)
+			t7xx_fsm_append_event(ctl, FSM_EVENT_AP_HS2_EXIT, NULL, 0);
 
 		fsm_routine_exception(ctl, NULL, EXCEPTION_HS_TIMEOUT);
 		return -ETIMEDOUT;
@@ -335,6 +350,7 @@ static void fsm_routine_start(struct t7xx_fsm_ctl *ctl, struct t7xx_fsm_command 
 		return;
 	}
 
+	t7xx_cldma_hif_hw_init(md->md_ctrl[CLDMA_ID_AP]);
 	t7xx_cldma_hif_hw_init(md->md_ctrl[CLDMA_ID_MD]);
 	fsm_finish_command(ctl, cmd, fsm_routine_starting(ctl));
 }
@@ -387,7 +403,6 @@ static int fsm_main_thread(void *data)
 
 int t7xx_fsm_append_cmd(struct t7xx_fsm_ctl *ctl, enum t7xx_fsm_cmd_state cmd_id, unsigned int flag)
 {
-	DECLARE_COMPLETION_ONSTACK(done);
 	struct t7xx_fsm_command *cmd;
 	unsigned long flags;
 	int ret;
@@ -399,11 +414,13 @@ int t7xx_fsm_append_cmd(struct t7xx_fsm_ctl *ctl, enum t7xx_fsm_cmd_state cmd_id
 	INIT_LIST_HEAD(&cmd->entry);
 	cmd->cmd_id = cmd_id;
 	cmd->flag = flag;
+	kref_init(&cmd->refcnt);
 	if (flag & FSM_CMD_FLAG_WAIT_FOR_COMPLETION) {
-		cmd->done = &done;
-		cmd->ret = &ret;
+		init_completion(&cmd->done);
+		kref_get(&cmd->refcnt);
 	}
 
+	kref_get(&cmd->refcnt);
 	spin_lock_irqsave(&ctl->command_lock, flags);
 	list_add_tail(&cmd->entry, &ctl->command_queue);
 	spin_unlock_irqrestore(&ctl->command_lock, flags);
@@ -413,11 +430,11 @@ int t7xx_fsm_append_cmd(struct t7xx_fsm_ctl *ctl, enum t7xx_fsm_cmd_state cmd_id
 	if (flag & FSM_CMD_FLAG_WAIT_FOR_COMPLETION) {
 		unsigned long wait_ret;
 
-		wait_ret = wait_for_completion_timeout(&done,
+		wait_ret = wait_for_completion_timeout(&cmd->done,
 						       msecs_to_jiffies(FSM_CMD_TIMEOUT_MS));
-		if (!wait_ret)
-			return -ETIMEDOUT;
 
+		ret = wait_ret ? cmd->result : -ETIMEDOUT;
+		kref_put(&cmd->refcnt, fsm_release_command);
 		return ret;
 	}
 

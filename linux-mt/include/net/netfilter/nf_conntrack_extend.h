@@ -13,6 +13,7 @@ enum nf_ct_ext_id {
 #endif
 	NF_CT_EXT_SEQADJ,
 	NF_CT_EXT_ACCT,
+	NF_CT_EXT_QOS,
 #ifdef CONFIG_NF_CONNTRACK_EVENTS
 	NF_CT_EXT_ECACHE,
 #endif

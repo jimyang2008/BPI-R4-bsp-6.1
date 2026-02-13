@@ -1,0 +1,49 @@
+In file included from test-libperl.c:3:
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/perl.h:2959:22: error: unknown type name 'off64_t'; did you mean 'off_t'?
+ 2959 | #       define Off_t off64_t
+      |                      ^~~~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/perlio.h:241:15: note: in expansion of macro 'Off_t'
+  241 | PERL_CALLCONV Off_t PerlIO_tell(PerlIO *);
+      |               ^~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/perl.h:2959:22: error: unknown type name 'off64_t'; did you mean 'off_t'?
+ 2959 | #       define Off_t off64_t
+      |                      ^~~~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/perlio.h:244:41: note: in expansion of macro 'Off_t'
+  244 | PERL_CALLCONV int PerlIO_seek(PerlIO *, Off_t, int);
+      |                                         ^~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/perl.h:2959:22: error: unknown type name 'off64_t'; did you mean 'off_t'?
+ 2959 | #       define Off_t off64_t
+      |                      ^~~~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/proto.h:963:52: note: in expansion of macro 'Off_t'
+  963 | PERL_CALLCONV bool      Perl_do_seek(pTHX_ GV* gv, Off_t pos, int whence);
+      |                                                    ^~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/perl.h:2959:22: error: unknown type name 'off64_t'; did you mean 'off_t'?
+ 2959 | #       define Off_t off64_t
+      |                      ^~~~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/proto.h:971:15: note: in expansion of macro 'Off_t'
+  971 | PERL_CALLCONV Off_t     Perl_do_sysseek(pTHX_ GV* gv, Off_t pos, int whence);
+      |               ^~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/perl.h:2959:22: error: unknown type name 'off64_t'; did you mean 'off_t'?
+ 2959 | #       define Off_t off64_t
+      |                      ^~~~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/proto.h:971:55: note: in expansion of macro 'Off_t'
+  971 | PERL_CALLCONV Off_t     Perl_do_sysseek(pTHX_ GV* gv, Off_t pos, int whence);
+      |                                                       ^~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/perl.h:2959:22: error: unknown type name 'off64_t'; did you mean 'off_t'?
+ 2959 | #       define Off_t off64_t
+      |                      ^~~~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/proto.h:974:15: note: in expansion of macro 'Off_t'
+  974 | PERL_CALLCONV Off_t     Perl_do_tell(pTHX_ GV* gv)
+      |               ^~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/perl.h:2959:22: error: unknown type name 'off64_t'; did you mean 'off_t'?
+ 2959 | #       define Off_t off64_t
+      |                      ^~~~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/proto.h:6876:59: note: in expansion of macro 'Off_t'
+ 6876 | PERL_CALLCONV int       Perl_PerlIO_seek(pTHX_ PerlIO *f, Off_t offset, int whence);
+      |                                                           ^~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/perl.h:2959:22: error: unknown type name 'off64_t'; did you mean 'off_t'?
+ 2959 | #       define Off_t off64_t
+      |                      ^~~~~~~
+/usr/lib/x86_64-linux-gnu/perl/5.34/CORE/proto.h:6896:15: note: in expansion of macro 'Off_t'
+ 6896 | PERL_CALLCONV Off_t     Perl_PerlIO_tell(pTHX_ PerlIO *f);
+      |               ^~~~~

@@ -840,15 +840,15 @@ static void igc_ethtool_get_stats(struct net_device *netdev,
 
 		ring = adapter->tx_ring[j];
 		do {
-			start = u64_stats_fetch_begin_irq(&ring->tx_syncp);
+			start = u64_stats_fetch_begin(&ring->tx_syncp);
 			data[i]   = ring->tx_stats.packets;
 			data[i + 1] = ring->tx_stats.bytes;
 			data[i + 2] = ring->tx_stats.restart_queue;
-		} while (u64_stats_fetch_retry_irq(&ring->tx_syncp, start));
+		} while (u64_stats_fetch_retry(&ring->tx_syncp, start));
 		do {
-			start = u64_stats_fetch_begin_irq(&ring->tx_syncp2);
+			start = u64_stats_fetch_begin(&ring->tx_syncp2);
 			restart2  = ring->tx_stats.restart_queue2;
-		} while (u64_stats_fetch_retry_irq(&ring->tx_syncp2, start));
+		} while (u64_stats_fetch_retry(&ring->tx_syncp2, start));
 		data[i + 2] += restart2;
 
 		i += IGC_TX_QUEUE_STATS_LEN;
@@ -856,13 +856,13 @@ static void igc_ethtool_get_stats(struct net_device *netdev,
 	for (j = 0; j < adapter->num_rx_queues; j++) {
 		ring = adapter->rx_ring[j];
 		do {
-			start = u64_stats_fetch_begin_irq(&ring->rx_syncp);
+			start = u64_stats_fetch_begin(&ring->rx_syncp);
 			data[i]   = ring->rx_stats.packets;
 			data[i + 1] = ring->rx_stats.bytes;
 			data[i + 2] = ring->rx_stats.drops;
 			data[i + 3] = ring->rx_stats.csum_err;
 			data[i + 4] = ring->rx_stats.alloc_failed;
-		} while (u64_stats_fetch_retry_irq(&ring->rx_syncp, start));
+		} while (u64_stats_fetch_retry(&ring->rx_syncp, start));
 		i += IGC_RX_QUEUE_STATS_LEN;
 	}
 	spin_unlock(&adapter->stats64_lock);
@@ -1623,18 +1623,18 @@ static int igc_ethtool_set_priv_flags(struct net_device *netdev, u32 priv_flags)
 }
 
 static int igc_ethtool_get_eee(struct net_device *netdev,
-			       struct ethtool_eee *edata)
+			       struct ethtool_keee *edata)
 {
 	struct igc_adapter *adapter = netdev_priv(netdev);
 	struct igc_hw *hw = &adapter->hw;
 	u32 eeer;
 
 	if (hw->dev_spec._base.eee_enable)
-		edata->advertised =
+		edata->advertised_u32 =
 			mmd_eee_adv_to_ethtool_adv_t(adapter->eee_advert);
 
 	*edata = adapter->eee;
-	edata->supported = SUPPORTED_Autoneg;
+	edata->supported_u32 = SUPPORTED_Autoneg;
 
 	eeer = rd32(IGC_EEER);
 
@@ -1647,8 +1647,8 @@ static int igc_ethtool_get_eee(struct net_device *netdev,
 
 	edata->eee_enabled = hw->dev_spec._base.eee_enable;
 
-	edata->advertised = SUPPORTED_Autoneg;
-	edata->lp_advertised = SUPPORTED_Autoneg;
+	edata->advertised_u32 = SUPPORTED_Autoneg;
+	edata->lp_advertised_u32 = SUPPORTED_Autoneg;
 
 	/* Report correct negotiated EEE status for devices that
 	 * wrongly report EEE at half-duplex
@@ -1657,21 +1657,21 @@ static int igc_ethtool_get_eee(struct net_device *netdev,
 		edata->eee_enabled = false;
 		edata->eee_active = false;
 		edata->tx_lpi_enabled = false;
-		edata->advertised &= ~edata->advertised;
+		edata->advertised_u32 &= ~edata->advertised_u32;
 	}
 
 	return 0;
 }
 
 static int igc_ethtool_set_eee(struct net_device *netdev,
-			       struct ethtool_eee *edata)
+			       struct ethtool_keee *edata)
 {
 	struct igc_adapter *adapter = netdev_priv(netdev);
 	struct igc_hw *hw = &adapter->hw;
-	struct ethtool_eee eee_curr;
+	struct ethtool_keee eee_curr;
 	s32 ret_val;
 
-	memset(&eee_curr, 0, sizeof(struct ethtool_eee));
+	memset(&eee_curr, 0, sizeof(struct ethtool_keee));
 
 	ret_val = igc_ethtool_get_eee(netdev, &eee_curr);
 	if (ret_val) {
@@ -1699,7 +1699,7 @@ static int igc_ethtool_set_eee(struct net_device *netdev,
 		return -EINVAL;
 	}
 
-	adapter->eee_advert = ethtool_adv_to_mmd_eee_adv_t(edata->advertised);
+	adapter->eee_advert = ethtool_adv_to_mmd_eee_adv_t(edata->advertised_u32);
 	if (hw->dev_spec._base.eee_enable != edata->eee_enabled) {
 		hw->dev_spec._base.eee_enable = edata->eee_enabled;
 		adapter->flags |= IGC_FLAG_EEE;

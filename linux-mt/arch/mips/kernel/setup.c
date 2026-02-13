@@ -54,7 +54,7 @@ struct cpuinfo_mips cpu_data[NR_CPUS] __read_mostly;
 
 EXPORT_SYMBOL(cpu_data);
 
-#ifdef CONFIG_VT
+#ifdef CONFIG_VGA_CONSOLE
 struct screen_info screen_info;
 #endif
 
@@ -90,21 +90,27 @@ static struct resource bss_resource = { .name = "Kernel bss", };
 unsigned long __kaslr_offset __ro_after_init;
 EXPORT_SYMBOL(__kaslr_offset);
 
-static void *detect_magic __initdata = detect_memory_region;
-
 #ifdef CONFIG_MIPS_AUTO_PFN_OFFSET
 unsigned long ARCH_PFN_OFFSET;
 EXPORT_SYMBOL(ARCH_PFN_OFFSET);
 #endif
 
+#ifndef CONFIG_64BIT
+static u32 detect_magic __initdata;
+#define MIPS_MEM_TEST_PATTERN		0xaa5555aa
+
 void __init detect_memory_region(phys_addr_t start, phys_addr_t sz_min, phys_addr_t sz_max)
 {
-	void *dm = &detect_magic;
+	void *dm = (void *)KSEG1ADDR(&detect_magic);
 	phys_addr_t size;
 
 	for (size = sz_min; size < sz_max; size <<= 1) {
-		if (!memcmp(dm, dm + size, sizeof(detect_magic)))
-			break;
+		__raw_writel(MIPS_MEM_TEST_PATTERN, dm);
+		if (__raw_readl(dm) == __raw_readl(dm + size)) {
+			__raw_writel(~MIPS_MEM_TEST_PATTERN, dm);
+			if (__raw_readl(dm) == __raw_readl(dm + size))
+				break;
+		}
 	}
 
 	pr_debug("Memory: %lluMB of RAM detected at 0x%llx (min: %lluMB, max: %lluMB)\n",
@@ -115,6 +121,7 @@ void __init detect_memory_region(phys_addr_t start, phys_addr_t sz_min, phys_add
 
 	memblock_add(start, size);
 }
+#endif /* CONFIG_64BIT */
 
 /*
  * Manage initrd
@@ -326,11 +333,11 @@ static void __init bootmem_init(void)
 		panic("Incorrect memory mapping !!!");
 
 	if (max_pfn > PFN_DOWN(HIGHMEM_START)) {
+		max_low_pfn = PFN_DOWN(HIGHMEM_START);
 #ifdef CONFIG_HIGHMEM
-		highstart_pfn = PFN_DOWN(HIGHMEM_START);
+		highstart_pfn = max_low_pfn;
 		highend_pfn = max_pfn;
 #else
-		max_low_pfn = PFN_DOWN(HIGHMEM_START);
 		max_pfn = max_low_pfn;
 #endif
 	}
@@ -789,7 +796,8 @@ void __init setup_arch(char **cmdline_p)
 	setup_early_printk();
 #endif
 	cpu_report();
-	check_bugs_early();
+	if (IS_ENABLED(CONFIG_CPU_R4X00_BUGS64))
+		check_bugs64_early();
 
 #if defined(CONFIG_VT)
 #if defined(CONFIG_VGA_CONSOLE)

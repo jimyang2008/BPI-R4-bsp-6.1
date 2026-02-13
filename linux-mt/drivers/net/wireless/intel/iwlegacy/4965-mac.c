@@ -1575,8 +1575,11 @@ il4965_tx_cmd_build_rate(struct il_priv *il,
 	    || rate_idx > RATE_COUNT_LEGACY)
 		rate_idx = rate_lowest_index(&il->bands[info->band], sta);
 	/* For 5 GHZ band, remap mac80211 rate indices into driver indices */
-	if (info->band == NL80211_BAND_5GHZ)
+	if (info->band == NL80211_BAND_5GHZ) {
 		rate_idx += IL_FIRST_OFDM_RATE;
+		if (rate_idx > IL_LAST_OFDM_RATE)
+			rate_idx = IL_LAST_OFDM_RATE;
+	}
 	/* Get PLCP rate for tx_cmd->rate_n_flags */
 	rate_plcp = il_rates[rate_idx].plcp;
 	/* Zero out flags for this packet */
@@ -4020,7 +4023,7 @@ il4965_hdl_alive(struct il_priv *il, struct il_rx_buf *rxb)
 
 	if (palive->ver_subtype == INITIALIZE_SUBTYPE) {
 		D_INFO("Initialization Alive received.\n");
-		memcpy(&il->card_alive_init, &pkt->u.alive_frame,
+		memcpy(&il->card_alive_init, &pkt->u.raw,
 		       sizeof(struct il_init_alive_resp));
 		pwork = &il->init_alive_start;
 	} else {
@@ -6308,6 +6311,7 @@ il4965_tx_queue_set_status(struct il_priv *il, struct il_tx_queue *txq,
 
 static const struct ieee80211_ops il4965_mac_ops = {
 	.tx = il4965_mac_tx,
+	.wake_tx_queue = ieee80211_handle_wake_tx_queue,
 	.start = il4965_mac_start,
 	.stop = il4965_mac_stop,
 	.add_interface = il_mac_add_interface,

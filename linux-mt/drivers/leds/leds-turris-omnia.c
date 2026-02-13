@@ -449,8 +449,7 @@ static int omnia_mcu_get_features(const struct i2c_client *client)
 	return le16_to_cpu(reply);
 }
 
-static int omnia_leds_probe(struct i2c_client *client,
-			    const struct i2c_device_id *id)
+static int omnia_leds_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct device_node *np = dev_of_node(dev), *child;

@@ -29,7 +29,8 @@ static const struct flash_info eon_nor_parts[] = {
 		NO_SFDP_FLAGS(SECT_4K | SPI_NOR_DUAL_READ) },
 	{ "en25qh128",  INFO(0x1c7018, 0, 64 * 1024,  256) },
 	{ "en25qh256",  INFO(0x1c7019, 0, 64 * 1024,  512)
-		PARSE_SFDP },
+		PARSE_SFDP
+		FIXUP_FLAGS(SPI_NOR_4B_OPCODES) },
 	{ "en25s64",	INFO(0x1c3817, 0, 64 * 1024,  128)
 		NO_SFDP_FLAGS(SECT_4K) },
 };

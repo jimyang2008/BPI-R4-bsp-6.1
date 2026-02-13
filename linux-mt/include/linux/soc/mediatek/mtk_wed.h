@@ -56,6 +56,20 @@ enum mtk_wed_bus_tye {
 	MTK_WED_BUS_AXI,
 };
 
+enum mtk_wed_hwrro_mode {
+	MTK_WED_HWRRO_DISABLE,
+	MTK_WED_HWRRO_V3,
+	MTK_WED_HWRRO_V3_1,
+};
+
+enum mtk_wed_hw_version {
+	MTK_WED_DISABLE,
+	MTK_WED_HW_V1,
+	MTK_WED_HW_V2,
+	MTK_WED_HW_V3,
+	MTK_WED_HW_V3_1 = 5,
+};
+
 #define MTK_WED_RING_CONFIGURED		BIT(0)
 struct mtk_wed_ring {
 	struct mtk_wdma_desc *desc;
@@ -103,6 +117,7 @@ struct mtk_wed_device {
 	struct mtk_wed_ring rx_rro_ring[MTK_WED_RX_QUEUES];
 	struct mtk_wed_ring rx_page_ring[MTK_WED_RX_PAGE_QUEUES];
 	struct mtk_wed_ring ind_cmd_ring;
+	struct mtk_wed_ring rx_rro_3_1_ring;
 
 	struct {
 		int size;
@@ -113,7 +128,6 @@ struct mtk_wed_device {
 
 	struct {
 		int size;
-		struct page_frag_cache rx_page;
 		struct mtk_wed_bm_desc *desc;
 		dma_addr_t desc_phys;
 	} rx_buf_ring;
@@ -145,15 +159,16 @@ struct mtk_wed_device {
 		u32 wpdma_phys;
 		u32 wpdma_int;
 		u32 wpdma_mask;
-		u32 wpdma_tx;
+		u32 wpdma_tx[MTK_WED_TX_QUEUES];
 		u32 wpdma_txfree;
 		u32 wpdma_rx_glo;
-		u32 wpdma_rx;
+		u32 wpdma_rx[MTK_WED_RX_QUEUES];
 		u32 wpdma_rx_rro[MTK_WED_RX_QUEUES];
 		u32 wpdma_rx_pg;
+		u32 wpdma_rro_3_1_rx;
 
 		bool wcid_512;
-		bool hw_rro;
+		enum mtk_wed_hwrro_mode hw_rro;
 		bool msi;
 
 		u16 token_start;
@@ -168,6 +183,7 @@ struct mtk_wed_device {
 		u8 rro_rx_tbit[MTK_WED_RX_QUEUES];
 		u8 rx_pg_tbit[MTK_WED_RX_PAGE_QUEUES];
 		u8 txfree_tbit;
+		u8 rro_3_1_rx_tbit;
 		u8 amsdu_max_subframes;
 
 		struct {
@@ -205,6 +221,7 @@ struct mtk_wed_ops {
 	void (*detach)(struct mtk_wed_device *dev);
 	void (*ppe_check)(struct mtk_wed_device *dev, struct sk_buff *skb,
 			  u32 reason, u32 hash);
+	void (*ppe_drop)(struct mtk_wed_device *dev, bool enable);
 
 	void (*stop)(struct mtk_wed_device *dev);
 	void (*start)(struct mtk_wed_device *dev, u32 irq_mask);
@@ -217,6 +234,7 @@ struct mtk_wed_ops {
 	void (*irq_set_mask)(struct mtk_wed_device *dev, u32 mask);
 	int (*setup_tc)(struct mtk_wed_device *wed, struct net_device *dev,
 			enum tc_setup_type type, void *type_data);
+	int (*get_hw_version)(void);
 	void (*start_hw_rro)(struct mtk_wed_device *dev, u32 irq_mask,
 			     bool reset);
 	void (*rro_rx_ring_setup)(struct mtk_wed_device *dev, int ring,
@@ -225,6 +243,8 @@ struct mtk_wed_ops {
 				      void __iomem *regs);
 	int (*ind_rx_ring_setup)(struct mtk_wed_device *dev,
 				 void __iomem *regs);
+	void (*rro_3_1_rx_ring_setup)(struct mtk_wed_device *dev,
+				      void __iomem *regs);
 };
 
 extern const struct mtk_wed_ops __rcu *mtk_soc_wed_ops;
@@ -249,13 +269,36 @@ mtk_wed_device_attach(struct mtk_wed_device *dev)
 	return ret;
 }
 
+static inline int
+mtk_wed_device_get_hw_version(void)
+{
+	int ret = MTK_WED_DISABLE;
+	const struct mtk_wed_ops *ops;
+#ifdef CONFIG_NET_MEDIATEK_SOC_WED
+	rcu_read_lock();
+	ops = rcu_dereference(mtk_soc_wed_ops);
+	if (ops)
+		ret = ops->get_hw_version();
+
+	rcu_read_unlock();
+#endif
+
+	return ret;
+}
+
 static inline bool mtk_wed_get_rx_capa(struct mtk_wed_device *dev)
 {
 #ifdef CONFIG_NET_MEDIATEK_SOC_WED
-	if (dev->version == 3)
+	switch (dev->version) {
+	case MTK_WED_HW_V3:
+	case MTK_WED_HW_V3_1:
 		return dev->wlan.hw_rro;
-
-	return dev->version != 1;
+	case MTK_WED_HW_V2:
+		return true;
+	case MTK_WED_HW_V1:
+	default:
+		return false;
+	}
 #else
 	return false;
 #endif
@@ -264,7 +307,7 @@ static inline bool mtk_wed_get_rx_capa(struct mtk_wed_device *dev)
 static inline bool mtk_wed_is_amsdu_supported(struct mtk_wed_device *dev)
 {
 #ifdef CONFIG_NET_MEDIATEK_SOC_WED
-	return dev->version == 3;
+	return dev->version > MTK_WED_HW_V2;
 #else
 	return false;
 #endif
@@ -290,6 +333,8 @@ static inline bool mtk_wed_is_amsdu_supported(struct mtk_wed_device *dev)
 	(_dev)->ops->rx_ring_setup(_dev, _ring, _regs, _reset)
 #define mtk_wed_device_ppe_check(_dev, _skb, _reason, _hash) \
 	(_dev)->ops->ppe_check(_dev, _skb, _reason, _hash)
+#define mtk_wed_device_ppe_drop(_dev, _enable) \
+	(_dev)->ops->ppe_drop(_dev, _enable)
 #define mtk_wed_device_update_msg(_dev, _id, _msg, _len) \
 	(_dev)->ops->msg_update(_dev, _id, _msg, _len)
 #define mtk_wed_device_stop(_dev) (_dev)->ops->stop(_dev)
@@ -304,6 +349,8 @@ static inline bool mtk_wed_is_amsdu_supported(struct mtk_wed_device *dev)
 	(_dev)->ops->msdu_pg_rx_ring_setup(_dev, _ring, _regs)
 #define mtk_wed_device_ind_rx_ring_setup(_dev, _regs) \
 	(_dev)->ops->ind_rx_ring_setup(_dev, _regs)
+#define mtk_wed_device_rro_3_1_rx_ring_setup(_dev, _regs) \
+	(_dev)->ops->rro_3_1_rx_ring_setup(_dev, _regs)
 
 #else
 static inline bool mtk_wed_device_active(struct mtk_wed_device *dev)
@@ -320,6 +367,7 @@ static inline bool mtk_wed_device_active(struct mtk_wed_device *dev)
 #define mtk_wed_device_irq_set_mask(_dev, _mask) do {} while (0)
 #define mtk_wed_device_rx_ring_setup(_dev, _ring, _regs, _reset) -ENODEV
 #define mtk_wed_device_ppe_check(_dev, _skb, _reason, _hash)  do {} while (0)
+#define mtk_wed_device_ppe_drop(_dev, _enable)  do {} while (0)
 #define mtk_wed_device_update_msg(_dev, _id, _msg, _len) -ENODEV
 #define mtk_wed_device_stop(_dev) do {} while (0)
 #define mtk_wed_device_dma_reset(_dev) do {} while (0)
@@ -328,6 +376,7 @@ static inline bool mtk_wed_device_active(struct mtk_wed_device *dev)
 #define mtk_wed_device_rro_rx_ring_setup(_dev, _ring, _regs) -ENODEV
 #define mtk_wed_device_msdu_pg_rx_ring_setup(_dev, _ring, _regs) -ENODEV
 #define mtk_wed_device_ind_rx_ring_setup(_dev, _regs) -ENODEV
+#define mtk_wed_device_rro_3_1_rx_ring_setup(_dev, _regs) -ENODEV
 #endif
 
 #endif

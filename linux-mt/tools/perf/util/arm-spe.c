@@ -37,6 +37,8 @@
 #include "../../arch/arm64/include/asm/cputype.h"
 #define MAX_TIMESTAMP (~0ULL)
 
+#define is_ldst_op(op)		(!!((op) & ARM_SPE_OP_LDST))
+
 struct arm_spe {
 	struct auxtrace			auxtrace;
 	struct auxtrace_queues		queues;
@@ -254,9 +256,9 @@ static void arm_spe_set_pid_tid_cpu(struct arm_spe *spe,
 	}
 
 	if (speq->thread) {
-		speq->pid = speq->thread->pid_;
+		speq->pid = thread__pid(speq->thread);
 		if (queue->cpu == -1)
-			speq->cpu = speq->thread->cpu;
+			speq->cpu = thread__cpu(speq->thread);
 	}
 }
 
@@ -271,6 +273,25 @@ static int arm_spe_set_tid(struct arm_spe_queue *speq, pid_t tid)
 	arm_spe_set_pid_tid_cpu(spe, &spe->queues.queue_array[speq->queue_nr]);
 
 	return 0;
+}
+
+static struct simd_flags arm_spe__synth_simd_flags(const struct arm_spe_record *record)
+{
+	struct simd_flags simd_flags = {};
+
+	if ((record->op & ARM_SPE_OP_LDST) && (record->op & ARM_SPE_OP_SVE_LDST))
+		simd_flags.arch |= SIMD_OP_FLAGS_ARCH_SVE;
+
+	if ((record->op & ARM_SPE_OP_OTHER) && (record->op & ARM_SPE_OP_SVE_OTHER))
+		simd_flags.arch |= SIMD_OP_FLAGS_ARCH_SVE;
+
+	if (record->type & ARM_SPE_SVE_PARTIAL_PRED)
+		simd_flags.pred |= SIMD_OP_FLAGS_PRED_PARTIAL;
+
+	if (record->type & ARM_SPE_SVE_EMPTY_PRED)
+		simd_flags.pred |= SIMD_OP_FLAGS_PRED_EMPTY;
+
+	return simd_flags;
 }
 
 static void arm_spe_prep_sample(struct arm_spe *spe,
@@ -289,6 +310,7 @@ static void arm_spe_prep_sample(struct arm_spe *spe,
 	sample->tid = speq->tid;
 	sample->period = 1;
 	sample->cpu = speq->cpu;
+	sample->simd_flags = arm_spe__synth_simd_flags(record);
 
 	event->sample.header.type = PERF_RECORD_SAMPLE;
 	event->sample.header.misc = sample->cpumode;
@@ -411,7 +433,7 @@ static void arm_spe__synth_data_source_neoverse(const struct arm_spe_record *rec
 	 * We have no data on the hit level or data source for stores in the
 	 * Neoverse SPE records.
 	 */
-	if (record->op & ARM_SPE_ST) {
+	if (record->op & ARM_SPE_OP_ST) {
 		data_src->mem_lvl = PERF_MEM_LVL_NA;
 		data_src->mem_lvl_num = PERF_MEM_LVLNUM_NA;
 		data_src->mem_snoop = PERF_MEM_SNOOP_NA;
@@ -497,12 +519,16 @@ static void arm_spe__synth_data_source_generic(const struct arm_spe_record *reco
 
 static u64 arm_spe__synth_data_source(const struct arm_spe_record *record, u64 midr)
 {
-	union perf_mem_data_src	data_src = { 0 };
+	union perf_mem_data_src	data_src = { .mem_op = PERF_MEM_OP_NA };
 	bool is_neoverse = is_midr_in_range_list(midr, neoverse_spe);
 
-	if (record->op == ARM_SPE_LD)
+	/* Only synthesize data source for LDST operations */
+	if (!is_ldst_op(record->op))
+		return 0;
+
+	if (record->op & ARM_SPE_OP_LD)
 		data_src.mem_op = PERF_MEM_OP_LOAD;
-	else if (record->op == ARM_SPE_ST)
+	else if (record->op & ARM_SPE_OP_ST)
 		data_src.mem_op = PERF_MEM_OP_STORE;
 	else
 		return 0;
@@ -599,7 +625,7 @@ static int arm_spe_sample(struct arm_spe_queue *speq)
 	 * When data_src is zero it means the record is not a memory operation,
 	 * skip to synthesize memory sample for this case.
 	 */
-	if (spe->sample_memory && data_src) {
+	if (spe->sample_memory && is_ldst_op(record->op)) {
 		err = arm_spe__synth_mem_sample(speq, spe->memory_id, data_src);
 		if (err)
 			return err;

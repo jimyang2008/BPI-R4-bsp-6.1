@@ -32,25 +32,6 @@ const struct of_device_id *of_match_device(const struct of_device_id *matches,
 }
 EXPORT_SYMBOL(of_match_device);
 
-int of_device_add(struct platform_device *ofdev)
-{
-	BUG_ON(ofdev->dev.of_node == NULL);
-
-	/* name and id have to be set so that the platform bus doesn't get
-	 * confused on matching */
-	ofdev->name = dev_name(&ofdev->dev);
-	ofdev->id = PLATFORM_DEVID_NONE;
-
-	/*
-	 * If this device has not binding numa node in devicetree, that is
-	 * of_node_to_nid returns NUMA_NO_NODE. device_add will assume that this
-	 * device is on the same node as the parent.
-	 */
-	set_dev_node(&ofdev->dev, of_node_to_nid(ofdev->dev.of_node));
-
-	return device_add(&ofdev->dev);
-}
-
 static void
 of_dma_set_restricted_buffer(struct device *dev, struct device_node *np)
 {
@@ -221,19 +202,6 @@ int of_dma_configure_id(struct device *dev, struct device_node *np,
 }
 EXPORT_SYMBOL_GPL(of_dma_configure_id);
 
-int of_device_register(struct platform_device *pdev)
-{
-	device_initialize(&pdev->dev);
-	return of_device_add(pdev);
-}
-EXPORT_SYMBOL(of_device_register);
-
-void of_device_unregister(struct platform_device *ofdev)
-{
-	device_unregister(&ofdev->dev);
-}
-EXPORT_SYMBOL(of_device_unregister);
-
 const void *of_device_get_match_data(const struct device *dev)
 {
 	const struct of_device_id *match;
@@ -245,15 +213,6 @@ const void *of_device_get_match_data(const struct device *dev)
 	return match->data;
 }
 EXPORT_SYMBOL(of_device_get_match_data);
-
-int of_device_request_module(struct device *dev)
-{
-	if (!dev)
-		return -ENODEV;
-
-	return of_request_module(dev->of_node);
-}
-EXPORT_SYMBOL_GPL(of_device_request_module);
 
 /**
  * of_device_modalias - Fill buffer with newline terminated modalias string
@@ -282,10 +241,10 @@ EXPORT_SYMBOL_GPL(of_device_modalias);
 
 /**
  * of_device_uevent - Display OF related uevent information
- * @dev:	Device to apply DMA configuration
- * @env:	Kernel object's userspace event reference
+ * @dev:	Device to display the uevent information for
+ * @env:	Kernel object's userspace event reference to fill up
  */
-void of_device_uevent(struct device *dev, struct kobj_uevent_env *env)
+void of_device_uevent(const struct device *dev, struct kobj_uevent_env *env)
 {
 	const char *compat, *type;
 	struct alias_prop *app;
@@ -321,8 +280,9 @@ void of_device_uevent(struct device *dev, struct kobj_uevent_env *env)
 	}
 	mutex_unlock(&of_mutex);
 }
+EXPORT_SYMBOL_GPL(of_device_uevent);
 
-int of_device_uevent_modalias(struct device *dev, struct kobj_uevent_env *env)
+int of_device_uevent_modalias(const struct device *dev, struct kobj_uevent_env *env)
 {
 	int sl;
 

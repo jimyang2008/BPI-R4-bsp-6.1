@@ -35,6 +35,15 @@ static struct usb_device_id productlist_table[] = {
 { USB_DEVICE(0x0525, 0xa4a0), },
 #endif
 
+/* xhci-mtk usb3 root-hub */
+{ USB_DEVICE(0x1d6b, 0x0003), },
+
+/* xhci-mtk usb2 root-hub */
+{ USB_DEVICE(0x1d6b, 0x0002), },
+
+/* MASS STORAGE */
+{ USB_INTERFACE_INFO(USB_CLASS_MASS_STORAGE, 0, 0) },
+
 { }	/* Terminating entry */
 };
 

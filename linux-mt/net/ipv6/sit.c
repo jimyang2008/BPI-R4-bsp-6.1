@@ -52,6 +52,11 @@
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 
+#if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+#include <linux/netfilter.h>
+#include <net/netfilter/nf_flow_table.h>
+#endif
+
 /*
    This version of net/ipv6/sit.c is cloned of net/ipv4/ip_gre.c
 
@@ -1024,7 +1029,7 @@ static netdev_tx_t ipip6_tunnel_xmit(struct sk_buff *skb,
 		ttl = iph6->hop_limit;
 	tos = INET_ECN_encapsulate(tos, ipv6_get_dsfield(iph6));
 
-	if (ip_tunnel_encap(skb, tunnel, &protocol, &fl4) < 0) {
+	if (ip_tunnel_encap(skb, &tunnel->encap, &protocol, &fl4) < 0) {
 		ip_rt_put(rt);
 		goto tx_error;
 	}
@@ -1393,6 +1398,22 @@ ipip6_tunnel_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
 	}
 }
 
+#if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+static int ipip6_dev_flow_offload_check(struct flow_offload_hw_path *path)
+{
+	struct net_device *dev = path->dev;
+	struct ip_tunnel *tnl = netdev_priv(dev);
+
+	if (path->flags & DEV_PATH_6RD)
+		return -EEXIST;
+
+	path->flags |= DEV_PATH_6RD;
+	path->dev = tnl->dev;
+
+	return 0;
+}
+#endif /* CONFIG_NF_FLOW_TABLE */
+
 static const struct net_device_ops ipip6_netdev_ops = {
 	.ndo_init	= ipip6_tunnel_init,
 	.ndo_uninit	= ipip6_tunnel_uninit,
@@ -1401,6 +1422,9 @@ static const struct net_device_ops ipip6_netdev_ops = {
 	.ndo_get_stats64 = dev_get_tstats64,
 	.ndo_get_iflink = ip_tunnel_get_iflink,
 	.ndo_tunnel_ctl = ipip6_tunnel_ctl,
+#if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+	.ndo_flow_offload_check = ipip6_dev_flow_offload_check,
+#endif
 };
 
 static void ipip6_dev_free(struct net_device *dev)
@@ -1460,6 +1484,7 @@ static int ipip6_tunnel_init(struct net_device *dev)
 		return err;
 	}
 	netdev_hold(dev, &tunnel->dev_tracker, GFP_KERNEL);
+	netdev_lockdep_set_classes(dev);
 	return 0;
 }
 

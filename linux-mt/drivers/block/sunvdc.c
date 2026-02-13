@@ -139,7 +139,7 @@ static int vdc_getgeo(struct block_device *bdev, struct hd_geometry *geo)
  * when vdisk_mtype is VD_MEDIA_TYPE_CD or VD_MEDIA_TYPE_DVD.
  * Needed to be able to install inside an ldom from an iso image.
  */
-static int vdc_ioctl(struct block_device *bdev, fmode_t mode,
+static int vdc_ioctl(struct block_device *bdev, blk_mode_t mode,
 		     unsigned command, unsigned long argument)
 {
 	struct vdc_port *port = bdev->bd_disk->private_data;
@@ -956,8 +956,10 @@ static bool vdc_port_mpgroup_check(struct vio_dev *vdev)
 	dev = device_find_child(vdev->dev.parent, &port_data,
 				vdc_device_probed);
 
-	if (dev)
+	if (dev) {
+		put_device(dev);
 		return true;
+	}
 
 	return false;
 }

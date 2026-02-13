@@ -55,7 +55,7 @@ struct coproc_instance {
 	struct vas_window *txwin;
 };
 
-static char *coproc_devnode(struct device *dev, umode_t *mode)
+static char *coproc_devnode(const struct device *dev, umode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "crypto/%s", dev_name(dev));
 }
@@ -414,7 +414,7 @@ static vm_fault_t vas_mmap_fault(struct vm_fault *vmf)
 	/*
 	 * When the LPAR lost credits due to core removal or during
 	 * migration, invalidate the existing mapping for the current
-	 * paste addresses and set windows in-active (zap_page_range in
+	 * paste addresses and set windows in-active (zap_vma_pages in
 	 * reconfig_close_windows()).
 	 * New mapping will be done later after migration or new credits
 	 * available. So continue to receive faults if the user space
@@ -464,7 +464,43 @@ static vm_fault_t vas_mmap_fault(struct vm_fault *vmf)
 	return VM_FAULT_SIGBUS;
 }
 
+/*
+ * During mmap() paste address, mapping VMA is saved in VAS window
+ * struct which is used to unmap during migration if the window is
+ * still open. But the user space can remove this mapping with
+ * munmap() before closing the window and the VMA address will
+ * be invalid. Set VAS window VMA to NULL in this function which
+ * is called before VMA free.
+ */
+static void vas_mmap_close(struct vm_area_struct *vma)
+{
+	struct file *fp = vma->vm_file;
+	struct coproc_instance *cp_inst = fp->private_data;
+	struct vas_window *txwin;
+
+	/* Should not happen */
+	if (!cp_inst || !cp_inst->txwin) {
+		pr_err("No attached VAS window for the paste address mmap\n");
+		return;
+	}
+
+	txwin = cp_inst->txwin;
+	/*
+	 * task_ref.vma is set in coproc_mmap() during mmap paste
+	 * address. So it has to be the same VMA that is getting freed.
+	 */
+	if (WARN_ON(txwin->task_ref.vma != vma)) {
+		pr_err("Invalid paste address mmaping\n");
+		return;
+	}
+
+	mutex_lock(&txwin->task_ref.mmap_mutex);
+	txwin->task_ref.vma = NULL;
+	mutex_unlock(&txwin->task_ref.mmap_mutex);
+}
+
 static const struct vm_operations_struct vas_vm_ops = {
+	.close = vas_mmap_close,
 	.fault = vas_mmap_fault,
 };
 
@@ -482,6 +518,15 @@ static int coproc_mmap(struct file *fp, struct vm_area_struct *vma)
 	if ((vma->vm_end - vma->vm_start) > PAGE_SIZE) {
 		pr_debug("size 0x%zx, PAGE_SIZE 0x%zx\n",
 				(vma->vm_end - vma->vm_start), PAGE_SIZE);
+		return -EINVAL;
+	}
+
+	/*
+	 * Map complete page to the paste address. So the user
+	 * space should pass 0ULL to the offset parameter.
+	 */
+	if (vma->vm_pgoff) {
+		pr_debug("Page offset unsupported to map paste address\n");
 		return -EINVAL;
 	}
 
@@ -524,7 +569,7 @@ static int coproc_mmap(struct file *fp, struct vm_area_struct *vma)
 	pfn = paste_addr >> PAGE_SHIFT;
 
 	/* flags, page_prot from cxl_mmap(), except we want cachable */
-	vma->vm_flags |= VM_IO | VM_PFNMAP;
+	vm_flags_set(vma, VM_IO | VM_PFNMAP);
 	vma->vm_page_prot = pgprot_cached(vma->vm_page_prot);
 
 	prot = __pgprot(pgprot_val(vma->vm_page_prot) | _PAGE_DIRTY);
@@ -580,7 +625,7 @@ int vas_register_coproc_api(struct module *mod, enum vas_cop_type cop_type,
 	pr_devel("%s device allocated, dev [%i,%i]\n", name,
 			MAJOR(coproc_device.devt), MINOR(coproc_device.devt));
 
-	coproc_device.class = class_create(mod, name);
+	coproc_device.class = class_create(name);
 	if (IS_ERR(coproc_device.class)) {
 		rc = PTR_ERR(coproc_device.class);
 		pr_err("Unable to create %s class %d\n", name, rc);

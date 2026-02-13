@@ -1,0 +1,24 @@
+/ws/orange-openwrt/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.104/tools/perf-target-aarch64_cortex-a53_musl/feature/test-lzma.bin: \
+ test-lzma.c \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdc-predef.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stddef.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/alltypes.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/inttypes.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/features.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/stdint.h \
+ /ws/orange-openwrt/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/include/bits/stdint.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/version.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/base.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/vli.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/check.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/filter.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/bcj.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/delta.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/lzma12.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/container.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/stream_flags.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/block.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/index.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/index_hash.h \
+ /ws/orange-openwrt/openwrt/staging_dir/target-aarch64_cortex-a53_musl/usr/include/lzma/hardware.h

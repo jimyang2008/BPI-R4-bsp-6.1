@@ -65,7 +65,7 @@ static ssize_t pwm_auto_point_temp_show(struct device *dev,
 		return ret;
 
 	ret = regs[0] | regs[1] << 8;
-	return sprintf(buf, "%d\n", ret * 10);
+	return sprintf(buf, "%d\n", ret * 100);
 }
 
 static ssize_t pwm_auto_point_temp_store(struct device *dev,
@@ -100,7 +100,7 @@ static ssize_t pwm_auto_point_pwm_show(struct device *dev,
 {
 	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
 
-	return sprintf(buf, "%d\n", 255 * (50 + (attr->index * 10)));
+	return sprintf(buf, "%d\n", 255 * (50 + (attr->index * 10)) / 100);
 }
 
 static SENSOR_DEVICE_ATTR_RO(pwm1_auto_point1_pwm, pwm_auto_point_pwm, 0);
@@ -257,13 +257,10 @@ gsc_hwmon_get_devtree_pdata(struct device *dev)
 	if (nchannels == 0)
 		return ERR_PTR(-ENODEV);
 
-	pdata = devm_kzalloc(dev,
-			     sizeof(*pdata) + nchannels * sizeof(*ch),
+	pdata = devm_kzalloc(dev, struct_size(pdata, channels, nchannels),
 			     GFP_KERNEL);
 	if (!pdata)
 		return ERR_PTR(-ENOMEM);
-	ch = (struct gsc_hwmon_channel *)(pdata + 1);
-	pdata->channels = ch;
 	pdata->nchannels = nchannels;
 
 	/* fan controller base address */
@@ -277,6 +274,7 @@ gsc_hwmon_get_devtree_pdata(struct device *dev)
 
 	of_node_put(fan);
 
+	ch = pdata->channels;
 	/* allocate structures for channels and count instances of each type */
 	device_for_each_child_node(dev, child) {
 		if (fwnode_property_read_string(child, "label", &ch->name)) {

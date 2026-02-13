@@ -8,7 +8,14 @@
  */
 
 #include <linux/cpumask.h>
+#include <linux/device.h>
+#include <linux/dma-mapping.h>
+#include <linux/kernel.h>
 #include <linux/kthread.h>
+#include <linux/netdevice.h>
+#include <linux/platform_device.h>
+#include <linux/slab.h>
+#include <linux/string.h>
 #include <soc/fsl/qman.h>
 
 #include "debugfs.h"
@@ -115,12 +122,12 @@ int caam_qi_enqueue(struct device *qidev, struct caam_drv_req *req)
 	qm_fd_addr_set64(&fd, addr);
 
 	do {
+		refcount_inc(&req->drv_ctx->refcnt);
 		ret = qman_enqueue(req->drv_ctx->req_fq, &fd);
-		if (likely(!ret)) {
-			refcount_inc(&req->drv_ctx->refcnt);
+		if (likely(!ret))
 			return 0;
-		}
 
+		refcount_dec(&req->drv_ctx->refcnt);
 		if (ret != -EBUSY)
 			break;
 		num_retries++;
@@ -614,7 +621,7 @@ static int alloc_rsp_fq_cpu(struct device *qidev, unsigned int cpu)
 	struct qman_fq *fq;
 	int ret;
 
-	fq = kzalloc(sizeof(*fq), GFP_KERNEL | GFP_DMA);
+	fq = kzalloc(sizeof(*fq), GFP_KERNEL);
 	if (!fq)
 		return -ENOMEM;
 
@@ -755,8 +762,8 @@ int caam_qi_init(struct platform_device *caam_pdev)
 		napi_enable(irqtask);
 	}
 
-	qi_cache = kmem_cache_create("caamqicache", CAAM_QI_MEMCACHE_SIZE, 0,
-				     SLAB_CACHE_DMA, NULL);
+	qi_cache = kmem_cache_create("caamqicache", CAAM_QI_MEMCACHE_SIZE,
+				     dma_get_cache_alignment(), 0, NULL);
 	if (!qi_cache) {
 		dev_err(qidev, "Can't allocate CAAM cache\n");
 		free_rsp_fqs();
@@ -765,7 +772,7 @@ int caam_qi_init(struct platform_device *caam_pdev)
 
 	caam_debugfs_qi_init(ctrlpriv);
 
-	err = devm_add_action_or_reset(qidev, caam_qi_shutdown, ctrlpriv);
+	err = devm_add_action_or_reset(qidev, caam_qi_shutdown, qidev);
 	if (err)
 		return err;
 

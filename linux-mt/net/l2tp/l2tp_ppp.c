@@ -89,6 +89,9 @@
 #include <linux/nsproxy.h>
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
+#if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+#include <net/netfilter/nf_flow_table.h>
+#endif
 #include <net/ip.h>
 #include <net/udp.h>
 #include <net/inet_common.h>
@@ -123,9 +126,14 @@ struct pppol2tp_session {
 };
 
 static int pppol2tp_xmit(struct ppp_channel *chan, struct sk_buff *skb);
+static int l2tp_ppp_flow_offload_check(struct ppp_channel *chan,
+				       struct flow_offload_hw_path *path);
 
 static const struct ppp_channel_ops pppol2tp_chan_ops = {
 	.start_xmit =  pppol2tp_xmit,
+#if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+	.flow_offload_check = l2tp_ppp_flow_offload_check,
+#endif /* IS_ENABLED(CONFIG_NF_FLOW_TABLE) */
 };
 
 static const struct proto_ops pppol2tp_ops;
@@ -327,6 +335,26 @@ error_put_sess:
 error:
 	return error;
 }
+
+#if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+static int l2tp_ppp_flow_offload_check(struct ppp_channel *chan,
+				       struct flow_offload_hw_path *path)
+{
+	struct sock *sk = (struct sock *)chan->private;
+	struct l2tp_session *session;
+
+	if (path->flags & DEV_PATH_TNL)
+		return -EEXIST;
+
+	session = pppol2tp_sock_to_session(sk);
+	if (!session)
+		return -EINVAL;
+
+	path->flags |= DEV_PATH_TNL;
+
+	return 0;
+}
+#endif /* IS_ENABLED(CONFIG_NF_FLOW_TABLE) */
 
 /* Transmit function called by generic PPP driver.  Sends PPP frame
  * over PPPoL2TP socket.
@@ -1356,10 +1384,10 @@ static int pppol2tp_getsockopt(struct socket *sock, int level, int optname,
 	if (get_user(len, optlen))
 		return -EFAULT;
 
-	len = min_t(unsigned int, len, sizeof(int));
-
 	if (len < 0)
 		return -EINVAL;
+
+	len = min_t(unsigned int, len, sizeof(int));
 
 	err = -ENOTCONN;
 	if (!sk->sk_user_data)

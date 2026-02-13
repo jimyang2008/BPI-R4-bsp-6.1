@@ -67,7 +67,7 @@ static acpi_status acpi_match_rc(acpi_handle handle, u32 lvl, void *context,
 	unsigned long long uid;
 	acpi_status status;
 
-	status = acpi_evaluate_integer(handle, "_UID", NULL, &uid);
+	status = acpi_evaluate_integer(handle, METHOD_NAME__UID, NULL, &uid);
 	if (ACPI_FAILURE(status) || uid != *segment)
 		return AE_CTRL_DEPTH;
 
@@ -793,13 +793,11 @@ int pci_acpi_program_hp_params(struct pci_dev *dev)
 bool pciehp_is_native(struct pci_dev *bridge)
 {
 	const struct pci_host_bridge *host;
-	u32 slot_cap;
 
 	if (!IS_ENABLED(CONFIG_HOTPLUG_PCI_PCIE))
 		return false;
 
-	pcie_capability_read_dword(bridge, PCI_EXP_SLTCAP, &slot_cap);
-	if (!(slot_cap & PCI_EXP_SLTCAP_HPC))
+	if (!bridge->is_pciehp)
 		return false;
 
 	if (pcie_ports_native)

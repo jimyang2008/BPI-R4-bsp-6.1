@@ -6,9 +6,7 @@
  */
 
 #include <linux/clk-provider.h>
-#include <linux/of.h>
-#include <linux/of_address.h>
-#include <linux/of_device.h>
+#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 
 #include "clk-mtk.h"
@@ -77,14 +75,15 @@ static const struct of_device_id of_match_clk_mt7622_eth[] = {
 	{ .compatible = "mediatek,mt7622-sgmiisys", .data = &sgmii_desc },
 	{ /* sentinel */ }
 };
+MODULE_DEVICE_TABLE(of, of_match_clk_mt7622_eth);
 
 static struct platform_driver clk_mt7622_eth_drv = {
 	.probe = mtk_clk_simple_probe,
-	.remove = mtk_clk_simple_remove,
+	.remove_new = mtk_clk_simple_remove,
 	.driver = {
 		.name = "clk-mt7622-eth",
 		.of_match_table = of_match_clk_mt7622_eth,
 	},
 };
-
-builtin_platform_driver(clk_mt7622_eth_drv);
+module_platform_driver(clk_mt7622_eth_drv);
+MODULE_LICENSE("GPL");
